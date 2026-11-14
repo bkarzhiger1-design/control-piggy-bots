@@ -1,4 +1,4 @@
--- Control Bots - Rayfield UI Script (PC & Mobile Support)
+-- Control Bots - Rayfield UI Script (Instant Movement & AI Block)
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
 local Window = Rayfield:CreateWindow({
@@ -16,11 +16,12 @@ local Tab = Window:CreateTab("Control", 4483362458)
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
--- Load PlayerModule controls for cross-platform (PC + Mobile Thumbstick) support
+-- Load PlayerModule controls for mobile thumbstick support
 local PlayerScripts = LocalPlayer:WaitForChild("PlayerScripts")
 local PlayerModule = PlayerScripts:WaitForChild("PlayerModule", 5)
 local Controls = PlayerModule and require(PlayerModule:WaitForChild("ControlModule"))
@@ -132,21 +133,39 @@ Tab:CreateToggle({
           end
           
           controlConn = RunService.RenderStepped:Connect(function()
-              if selectedNPC and selectedNPC:FindFirstChildOfClass("Humanoid") and selectedNPC:FindFirstChild("HumanoidRootPart") then
+              if selectedNPC and selectedNPC:FindFirstChild("HumanoidRootPart") then
+                  local targetHrp = selectedNPC.HumanoidRootPart
                   local hum = selectedNPC:FindFirstChildOfClass("Humanoid")
-                  local moveDir = Vector3.new(0, 0, 0)
                   
-                  if Controls then
-                      local moveVector = Controls:GetMoveVector()
-                      local camCF = Camera.CFrame
-                      local computedDir = (camCF.RightVector * moveVector.X) + (camCF.LookVector * moveVector.Z)
-                      moveDir = Vector3.new(computedDir.X, 0, computedDir.Z)
+                  local camCF = Camera.CFrame
+                  local forward = Vector3.new(camCF.LookVector.X, 0, camCF.LookVector.Z).Unit
+                  local right = Vector3.new(camCF.RightVector.X, 0, camCF.RightVector.Z).Unit
+                  
+                  local pcMove = Vector3.new(0,0,0)
+                  if UserInputService:IsKeyDown(Enum.KeyCode.W) then pcMove = pcMove + forward end
+                  if UserInputService:IsKeyDown(Enum.KeyCode.S) then pcMove = pcMove - forward end
+                  if UserInputService:IsKeyDown(Enum.KeyCode.A) then pcMove = pcMove - right end
+                  if UserInputService:IsKeyDown(Enum.KeyCode.D) then pcMove = pcMove + right end
+                  
+                  local moveVector = Vector3.new(0,0,0)
+                  if pcMove.Magnitude > 0 then
+                      moveVector = pcMove.Unit
+                  elseif Controls then
+                      local mv = Controls:GetMoveVector()
+                      if mv.Magnitude > 0 then
+                          local computedDir = (camCF.RightVector * mv.X) + (camCF.LookVector * mv.Z)
+                          moveVector = Vector3.new(computedDir.X, 0, computedDir.Z)
+                      end
                   end
                   
-                  if moveDir.Magnitude > 0 then
-                      hum:Move(moveDir.Unit, true)
+                  local speed = hum and hum.WalkSpeed or 16
+                  if moveVector.Magnitude > 0 then
+                      -- Instant velocity movement (zero delay) & overrides NPC AI movement
+                      targetHrp.AssemblyLinearVelocity = Vector3.new(moveVector.X * speed, targetHrp.AssemblyLinearVelocity.Y, moveVector.Z * speed)
+                      targetHrp.CFrame = CFrame.lookAt(targetHrp.Position, targetHrp.Position + moveVector)
                   else
-                      hum:Move(Vector3.new(0,0,0), true)
+                      -- Block NPC from moving on its own when you aren't pressing keys/thumbstick
+                      targetHrp.AssemblyLinearVelocity = Vector3.new(0, targetHrp.AssemblyLinearVelocity.Y, 0)
                   end
               end
           end)
@@ -171,7 +190,7 @@ Tab:CreateToggle({
       viewing = Value
       if viewing then
           if not selectedNPC or not selectedNPC.Parent then
-              Rayfield:Notify({Title = "Error", Content = "Please select an NPC first!", Duration = 3})
+              Rayfield:Notify({Title = "Error", Content = "Please support select an NPC first!", Duration = 3})
               return
           end
           teleportToVoid()
