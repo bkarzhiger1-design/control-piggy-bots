@@ -1,209 +1,303 @@
--- Control Bots - Rayfield UI Script (Instant Movement & AI Block)
-local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
-
-local Window = Rayfield:CreateWindow({
-   Name = "Control Bots",
-   LoadingTitle = "Control Bots Hub",
-   LoadingSubtitle = "Loading interface...",
-   ConfigurationSaving = {
-      Enabled = false,
-   },
-   KeySystem = false,
-})
-
-local Tab = Window:CreateTab("Control", 4483362458)
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
-local LocalPlayer = Players.LocalPlayer
-local Camera = Workspace.CurrentCamera
+local localPlayer = Players.LocalPlayer
 
--- Load PlayerModule controls for mobile thumbstick support
-local PlayerScripts = LocalPlayer:WaitForChild("PlayerScripts")
-local PlayerModule = PlayerScripts:WaitForChild("PlayerModule", 5)
-local Controls = PlayerModule and require(PlayerModule:WaitForChild("ControlModule"))
+local Window = Rayfield:CreateWindow({
+	Name = "Control Bots",
+	LoadingTitle = "Control Bots",
+	LoadingSubtitle = "NPC Controller",
+	ConfigurationSaving = { Enabled = false },
+	Discord = { Enabled = false },
+	KeySystem = false,
+})
 
+local ControlTab = Window:CreateTab("Control")
+
+-- */ State /* --
 local selectedNPC = nil
-local controlling = false
-local viewing = false
-local originalCFrame = nil
-local controlConn = nil
+local npcMap = {}
+local viewingNPC = nil
+local controlledNPC = nil
+local controlledHum = nil
+local controlConnection = nil
+local savedNPCWalkSpeed = nil
+local savedOwnWalkSpeed = nil
+local savedOwnJumpPower = nil
+local jumpGui = nil
+local playerControls = nil
 
-local function getNPCs()
-    local list = {}
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then
-            local isPlayer = false
-            for _, plr in ipairs(Players:GetPlayers()) do
-                if plr.Character == obj then
-                    isPlayer = true
-                    break
-                end
-            end
-            if not isPlayer and obj:FindFirstChild("HumanoidRootPart") then
-                table.insert(list, obj.Name)
-            end
-        end
-    end
-    if #list == 0 then
-        table.insert(list, "No NPCs Found")
-    end
-    return list
+-- */ Helpers /* --
+local function getOwnHumanoid()
+	local character = localPlayer.Character
+	return character and character:FindFirstChildOfClass("Humanoid")
 end
 
-local NPCDropdown = Tab:CreateDropdown({
-   Name = "Choose NPC",
-   Options = getNPCs(),
-   CurrentOption = "Choose NPC",
-   Flag = "NPCDropdown",
-   Callback = function(Option)
-      local name = type(Option) == "table" and Option[1] or Option
-      for _, obj in ipairs(Workspace:GetDescendants()) do
-          if obj:IsA("Model") and obj.Name == name and obj:FindFirstChildOfClass("Humanoid") then
-              local isPlr = false
-              for _, p in ipairs(Players:GetPlayers()) do
-                  if p.Character == obj then isPlr = true break end
-              end
-              if not isPlr then
-                  selectedNPC = obj
-                  break
-              end
-          end
-      end
-   end,
-})
-
-Tab:CreateButton({
-   Name = "Refresh NPC List",
-   Callback = function()
-      NPCDropdown:Refresh(getNPCs())
-      Rayfield:Notify({Title = "Refreshed", Content = "NPC list updated!", Duration = 2})
-   end,
-})
-
-local function teleportToVoid()
-    local char = LocalPlayer.Character
-    if char and char:FindFirstChild("HumanoidRootPart") then
-        local hrp = char.HumanoidRootPart
-        if not originalCFrame then
-            originalCFrame = hrp.CFrame
-        end
-        hrp.CFrame = CFrame.new(0, -99999, 0)
-        hrp.Anchored = true
-    end
+-- Roblox's PlayerModule handles keyboard, gamepad, and touch thumbstick input
+local function getPlayerControls()
+	if playerControls then
+		return playerControls
+	end
+	local ok, controls = pcall(function()
+		local playerModule = localPlayer:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule", 5)
+		return require(playerModule):GetControls()
+	end)
+	if ok then
+		playerControls = controls
+	end
+	return playerControls
 end
 
-local function restorePlayer()
-    local char = LocalPlayer.Character
-    if char and char:FindFirstChild("HumanoidRootPart") then
-        local hrp = char.HumanoidRootPart
-        hrp.Anchored = false
-        if originalCFrame then
-            hrp.CFrame = originalCFrame
-            originalCFrame = nil
-        end
-    end
+-- Returns a world-space direction based on the camera, so it works on every input device
+local function getMoveDirection()
+	local camera = Workspace.CurrentCamera
+	local controls = getPlayerControls()
+	if not camera or not controls then
+		return Vector3.zero
+	end
+
+	local move = controls:GetMoveVector()
+	local cf = camera.CFrame
+	local forward = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+	local right = Vector3.new(cf.RightVector.X, 0, cf.RightVector.Z)
+	if forward.Magnitude > 0 then forward = forward.Unit end
+	if right.Magnitude > 0 then right = right.Unit end
+
+	-- MoveVector: X is right/left, Z is backward/forward (negative Z is forward)
+	local dir = right * move.X - forward * move.Z
+	if dir.Magnitude > 1 then
+		dir = dir.Unit
+	end
+	return dir
 end
 
-Tab:CreateToggle({
-   Name = "Control NPC",
-   CurrentValue = false,
-   Flag = "ControlToggle",
-   Callback = function(Value)
-      controlling = Value
-      if controlling then
-          if not selectedNPC or not selectedNPC.Parent then
-              Rayfield:Notify({Title = "Error", Content = "Please select an NPC first!", Duration = 3})
-              return
-          end
-          
-          local hrp = selectedNPC:FindFirstChild("HumanoidRootPart")
-          if hrp and hrp.Anchored then
-              Rayfield:Notify({Title = "Notice", Content = "You cant move this NPC because he anchored", Duration = 4})
-              controlling = false
-              return
-          end
-          
-          teleportToVoid()
-          if selectedNPC:FindFirstChildOfClass("Humanoid") then
-              Camera.CameraSubject = selectedNPC:FindFirstChildOfClass("Humanoid")
-          end
-          
-          controlConn = RunService.RenderStepped:Connect(function()
-              if selectedNPC and selectedNPC:FindFirstChild("HumanoidRootPart") then
-                  local targetHrp = selectedNPC.HumanoidRootPart
-                  local hum = selectedNPC:FindFirstChildOfClass("Humanoid")
-                  
-                  local camCF = Camera.CFrame
-                  local forward = Vector3.new(camCF.LookVector.X, 0, camCF.LookVector.Z).Unit
-                  local right = Vector3.new(camCF.RightVector.X, 0, camCF.RightVector.Z).Unit
-                  
-                  local pcMove = Vector3.new(0,0,0)
-                  if UserInputService:IsKeyDown(Enum.KeyCode.W) then pcMove = pcMove + forward end
-                  if UserInputService:IsKeyDown(Enum.KeyCode.S) then pcMove = pcMove - forward end
-                  if UserInputService:IsKeyDown(Enum.KeyCode.A) then pcMove = pcMove - right end
-                  if UserInputService:IsKeyDown(Enum.KeyCode.D) then pcMove = pcMove + right end
-                  
-                  local moveVector = Vector3.new(0,0,0)
-                  if pcMove.Magnitude > 0 then
-                      moveVector = pcMove.Unit
-                  elseif Controls then
-                      local mv = Controls:GetMoveVector()
-                      if mv.Magnitude > 0 then
-                          local computedDir = (camCF.RightVector * mv.X) + (camCF.LookVector * mv.Z)
-                          moveVector = Vector3.new(computedDir.X, 0, computedDir.Z)
-                      end
-                  end
-                  
-                  local speed = hum and hum.WalkSpeed or 16
-                  if moveVector.Magnitude > 0 then
-                      -- Instant velocity movement (zero delay) & overrides NPC AI movement
-                      targetHrp.AssemblyLinearVelocity = Vector3.new(moveVector.X * speed, targetHrp.AssemblyLinearVelocity.Y, moveVector.Z * speed)
-                      targetHrp.CFrame = CFrame.lookAt(targetHrp.Position, targetHrp.Position + moveVector)
-                  else
-                      -- Block NPC from moving on its own when you aren't pressing keys/thumbstick
-                      targetHrp.AssemblyLinearVelocity = Vector3.new(0, targetHrp.AssemblyLinearVelocity.Y, 0)
-                  end
-              end
-          end)
-      else
-          if controlConn then
-              controlConn:Disconnect()
-              controlConn = nil
-          end
-          if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
-              Camera.CameraSubject = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-          end
-          restorePlayer()
-      end
-   end,
+local function getNPCList()
+	local names, map = {}, {}
+	for _, inst in ipairs(Workspace:GetDescendants()) do
+		if inst:IsA("Model") and not Players:GetPlayerFromCharacter(inst) then
+			local hum = inst:FindFirstChildOfClass("Humanoid")
+			if hum and hum.Health > 0 and inst:FindFirstChild("HumanoidRootPart") then
+				local label, count = inst.Name, 1
+				while map[label] do
+					count += 1
+					label = inst.Name .. " (" .. count .. ")"
+				end
+				map[label] = inst
+				table.insert(names, label)
+			end
+		end
+	end
+	table.sort(names)
+	return names, map
+end
+
+-- */ Available NPCs (dropdown) /* --
+local initialNames, initialMap = getNPCList()
+npcMap = initialMap
+
+local NPCDropdown = ControlTab:CreateDropdown({
+	Name = "Available NPCs",
+	Options = initialNames,
+	CurrentOption = {},
+	MultipleOptions = false,
+	Flag = "AvailableNPCs",
+	Callback = function(options)
+		local choice = type(options) == "table" and options[1] or options
+		selectedNPC = choice and npcMap[choice] or nil
+	end,
 })
 
-Tab:CreateToggle({
-   Name = "View NPC",
-   CurrentValue = false,
-   Flag = "ViewToggle",
-   Callback = function(Value)
-      viewing = Value
-      if viewing then
-          if not selectedNPC or not selectedNPC.Parent then
-              Rayfield:Notify({Title = "Error", Content = "Please support select an NPC first!", Duration = 3})
-              return
-          end
-          teleportToVoid()
-          if selectedNPC:FindFirstChildOfClass("Humanoid") then
-              Camera.CameraSubject = selectedNPC:FindFirstChildOfClass("Humanoid")
-          end
-      else
-          if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
-              Camera.CameraSubject = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-          end
-          restorePlayer()
-      end
-   end,
+local lastSignature = table.concat(initialNames, "|")
+task.spawn(function()
+	while true do
+		task.wait(2)
+		local names, map = getNPCList()
+		npcMap = map
+		if selectedNPC and not selectedNPC.Parent then
+			selectedNPC = nil
+		end
+		local signature = table.concat(names, "|")
+		if signature ~= lastSignature then
+			lastSignature = signature
+			NPCDropdown:Refresh(names)
+		end
+	end
+end)
+
+-- */ View NPC /* --
+local function stopViewing()
+	viewingNPC = nil
+	local ownHum = getOwnHumanoid()
+	if ownHum then
+		Workspace.CurrentCamera.CameraSubject = ownHum
+	end
+end
+
+ControlTab:CreateButton({
+	Name = "View NPC",
+	Callback = function()
+		if controlledNPC then
+			Rayfield:Notify({ Title = "Control Bots", Content = "Release the NPC you are controlling first.", Duration = 3 })
+			return
+		end
+		if not selectedNPC or not selectedNPC.Parent then
+			Rayfield:Notify({ Title = "Control Bots", Content = "Select an NPC from the list first.", Duration = 3 })
+			return
+		end
+		local hum = selectedNPC:FindFirstChildOfClass("Humanoid")
+		if not hum then return end
+
+		if viewingNPC == selectedNPC then
+			stopViewing()
+			Rayfield:Notify({ Title = "Control Bots", Content = "Camera returned to your character.", Duration = 3 })
+		else
+			viewingNPC = selectedNPC
+			Workspace.CurrentCamera.CameraSubject = hum
+			Rayfield:Notify({ Title = "Control Bots", Content = "Now viewing " .. selectedNPC.Name .. ".", Duration = 3 })
+		end
+	end,
 })
 
-Rayfield:LoadConfiguration()
+-- */ Mobile Jump Button /* --
+local function jumpNPC()
+	if controlledHum and controlledHum.Parent and controlledHum.Health > 0 then
+		controlledHum:ChangeState(Enum.HumanoidStateType.Jumping)
+	end
+end
+
+local function createJumpGui()
+	if jumpGui then return end
+
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "ControlBotsJump"
+	gui.ResetOnSpawn = false
+	gui.Enabled = false
+
+	local button = Instance.new("TextButton")
+	button.Size = UDim2.fromOffset(90, 90)
+	button.Position = UDim2.new(1, -120, 1, -170)
+	button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	button.BackgroundTransparency = 0.3
+	button.TextColor3 = Color3.new(1, 1, 1)
+	button.Text = "JUMP"
+	button.TextScaled = true
+	button.Parent = gui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(1, 0)
+	corner.Parent = button
+
+	button.Activated:Connect(jumpNPC)
+
+	gui.Parent = localPlayer:WaitForChild("PlayerGui")
+	jumpGui = gui
+end
+
+-- Keyboard Space still works on PC
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed or not controlledNPC then return end
+	if input.KeyCode == Enum.KeyCode.Space then
+		jumpNPC()
+	end
+end)
+
+-- */ Control NPC /* --
+local function freezeNPCMovement(hum, root)
+	-- Cancel any MoveTo the NPC's own AI started
+	hum:MoveTo(root.Position)
+	savedNPCWalkSpeed = hum.WalkSpeed
+end
+
+local function restoreNPCMovement(hum)
+	if hum and hum.Parent and savedNPCWalkSpeed then
+		hum.WalkSpeed = savedNPCWalkSpeed
+	end
+	savedNPCWalkSpeed = nil
+end
+
+local function stopControl()
+	if controlConnection then
+		controlConnection:Disconnect()
+		controlConnection = nil
+	end
+
+	if controlledHum and controlledHum.Parent then
+		controlledHum:Move(Vector3.zero, false)
+		restoreNPCMovement(controlledHum)
+	end
+
+	local ownHum = getOwnHumanoid()
+	if ownHum then
+		if savedOwnWalkSpeed then ownHum.WalkSpeed = savedOwnWalkSpeed end
+		if savedOwnJumpPower then ownHum.JumpPower = savedOwnJumpPower end
+		Workspace.CurrentCamera.CameraSubject = ownHum
+	end
+
+	if jumpGui then
+		jumpGui.Enabled = false
+	end
+
+	controlledNPC = nil
+	controlledHum = nil
+	savedOwnWalkSpeed = nil
+	savedOwnJumpPower = nil
+end
+
+local function startControl(model)
+	local hum = model:FindFirstChildOfClass("Humanoid")
+	local root = model:FindFirstChild("HumanoidRootPart")
+	if not hum or not root then return end
+
+	controlledNPC = model
+	controlledHum = hum
+	viewingNPC = nil
+
+	-- Freeze the NPC's own movement and disable its current pathing
+	freezeNPCMovement(hum, root)
+
+	-- Stop your own character from moving while you control the NPC
+	local ownHum = getOwnHumanoid()
+	if ownHum then
+		savedOwnWalkSpeed = ownHum.WalkSpeed
+		savedOwnJumpPower = ownHum.JumpPower
+		ownHum.WalkSpeed = 0
+		ownHum.JumpPower = 0
+	end
+
+	createJumpGui()
+	jumpGui.Enabled = UserInputService.TouchEnabled
+
+	Workspace.CurrentCamera.CameraSubject = hum
+
+	controlConnection = RunService.RenderStepped:Connect(function()
+		if not controlledNPC or not controlledNPC.Parent or not controlledHum or controlledHum.Health <= 0 then
+			stopControl()
+			return
+		end
+
+		-- Re-apply the direction every frame so the NPC follows only your input
+		controlledHum:Move(getMoveDirection(), false)
+	end)
+end
+
+ControlTab:CreateButton({
+	Name = "Control NPC",
+	Callback = function()
+		if controlledNPC then
+			stopControl()
+			Rayfield:Notify({ Title = "Control Bots", Content = "You released the NPC.", Duration = 3 })
+			return
+		end
+		if not selectedNPC or not selectedNPC.Parent then
+			Rayfield:Notify({ Title = "Control Bots", Content = "Select an NPC from the list first.", Duration = 3 })
+			return
+		end
+		startControl(selectedNPC)
+		local hint = UserInputService.TouchEnabled and "Use the thumbstick and JUMP button." or "Use WASD and Space."
+		Rayfield:Notify({ Title = "Control Bots", Content = "Controlling " .. selectedNPC.Name .. ". " .. hint .. " Press Control NPC again to release.", Duration = 5 })
+	end,
+})
