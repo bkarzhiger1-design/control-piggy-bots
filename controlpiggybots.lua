@@ -4,6 +4,8 @@ local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
 
 local localPlayer = Players.LocalPlayer
 local mouse = localPlayer:GetMouse()
@@ -46,7 +48,7 @@ end
 local Window = Rayfield:CreateWindow({
 	Name = "Boost Hub",
 	LoadingTitle = "Loading...",
-	LoadingSubtitle = "NPC Controller & Utilities",
+	LoadingSubtitle = "Boost Hub",
 	ConfigurationSaving = { Enabled = false },
 	Discord = { Enabled = false },
 	KeySystem = false,
@@ -57,6 +59,8 @@ local MainTab = Window:CreateTab("Main")
 local EspTab = Window:CreateTab("ESP")
 local PlayerTab = Window:CreateTab("Player")
 local TrollingTab = Window:CreateTab("Trolling")
+local QuestsTab = Window:CreateTab("Quests & Skins")
+local FarmTab = Window:CreateTab("Farming & Items")
 
 -- ==========================================
 -- CONTROL TAB (Combined Physics Control + Legacy Mode + View NPC)
@@ -65,9 +69,7 @@ local selectedNPC = nil
 local npcMap = {}
 local viewingNPC = nil
 local jumpGui = nil
-local playerControls = nil
 
--- Physics / Dummy Clone State
 local Controlling = false
 local CurrentlyControlledNPC = nil
 local OriginalProperties = {}
@@ -391,7 +393,6 @@ local function StartControlling(npcModel)
 	ClientVelocity.Enabled = true
 	Controlling = true
 
-	-- Heartbeat loop: keeps SimulationRadius maxed & anchors/positions your player 11 studs under the NPC
 	PhysicsHeartbeatConn = RunService.Heartbeat:Connect(function()
 		if not Controlling then return end
 
@@ -412,7 +413,6 @@ local function StartControlling(npcModel)
 			pcall(function() setsimulationradius(math.huge) end)
 		end
 
-		-- Teleport actual player 11 studs underneath the NPC
 		local npcPos = NPCRootPart.Position
 		currentHrp.CFrame = CFrame.new(npcPos.X, npcPos.Y - UNDER_OFFSET, npcPos.Z) * NPCRootPart.CFrame.Rotation
 
@@ -442,7 +442,7 @@ local function StartControlling(npcModel)
 	end)
 end
 
--- Killer Mode Loop (auto-targets nearest survivor when Mode == "Killer")
+-- Killer Mode Loop
 task.spawn(function()
 	while true do
 		task.wait(0.5)
@@ -623,7 +623,7 @@ mouse.Button1Down:Connect(function()
 end)
 
 -- ==========================================
--- MAIN TAB (From Old Script)
+-- MAIN TAB
 -- ==========================================
 local godMode1Active = false
 MainTab:CreateToggle({
@@ -736,7 +736,7 @@ MainTab:CreateToggle({
 })
 
 -- ==========================================
--- ESP TAB (From Old Script)
+-- ESP TAB
 -- ==========================================
 local piggyEspActive = false
 EspTab:CreateToggle({
@@ -921,7 +921,7 @@ EspTab:CreateToggle({
 })
 
 -- ==========================================
--- PLAYER TAB (From Old Script)
+-- PLAYER TAB
 -- ==========================================
 local IsOnMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 local flyingActive = false
@@ -1149,7 +1149,7 @@ Players.PlayerAdded:Connect(function() TpDropdown:Refresh(GetPlayerNames()) end)
 Players.PlayerRemoving:Connect(function() TpDropdown:Refresh(GetPlayerNames()) end)
 
 -- ==========================================
--- TROLLING TAB (From Old Script)
+-- TROLLING & MAP VOTING TAB
 -- ==========================================
 TrollingTab:CreateButton({
 	Name = "Kill Piggy (FE)",
@@ -1247,6 +1247,311 @@ TrollingTab:CreateToggle({
 					task.wait(0.5)
 				end
 			end)
+		end
+	end,
+})
+
+TrollingTab:CreateButton({
+	Name = "Vote Heist",
+	Callback = function()
+		pcall(function()
+			ReplicatedStorage.Remotes.NewVote:FireServer("Map", "Heist")
+			Rayfield:Notify({ Title = "Control Bots", Content = "Voted for Heist!", Duration = 2 })
+		end)
+	end,
+})
+
+TrollingTab:CreateButton({
+	Name = "Vote Distraction",
+	Callback = function()
+		pcall(function()
+			ReplicatedStorage.Remotes.NewVote:FireServer("Map", "Distraction")
+			Rayfield:Notify({ Title = "Control Bots", Content = "Voted for Distraction!", Duration = 2 })
+		end)
+	end,
+})
+
+-- ==========================================
+-- FARMING & ITEMS TAB (Farm Tool + Auto Find)
+-- ==========================================
+FarmTab:CreateButton({
+	Name = "Farm Tool Setup",
+	Callback = function()
+		Rayfield:Notify({ Title = "Farm Tool", Content = "Check console / instructions for Farm Tool usage.", Duration = 4 })
+		local highlightTool = Instance.new("Tool")
+		highlightTool.Name = "Farm Tool"
+		highlightTool.ToolTip = "Click the door then press Confirm"
+		highlightTool.RequiresHandle = false
+		highlightTool.Parent = localPlayer:WaitForChild("Backpack")
+	end,
+})
+
+local autoBlueprintsActive = false
+FarmTab:CreateToggle({
+	Name = "Auto Find Blueprints",
+	CurrentValue = false,
+	Flag = "AutoBlueprints",
+	Callback = function(Value)
+		autoBlueprintsActive = Value
+		if Value then
+			task.spawn(function()
+				local meshIds = { "60791940" }
+				while autoBlueprintsActive do
+					local hrp = getOwnRootPart()
+					if hrp then
+						for _, child in ipairs(Workspace:GetDescendants()) do
+							if child:IsA("Part") and child:FindFirstChildOfClass("ClickDetector") then
+								for _, mesh in ipairs(child:GetChildren()) do
+									if mesh:IsA("SpecialMesh") then
+										for _, id in ipairs(meshIds) do
+											if tostring(mesh.MeshId):find(id) then
+												local orig = hrp.CFrame
+												hrp.CFrame = child.CFrame * CFrame.new(0, 3, 0)
+												task.wait(0.2)
+												fireclickdetector(child:FindFirstChildOfClass("ClickDetector"))
+												task.wait(0.3)
+												hrp.CFrame = orig
+												break
+											end
+										end
+									end
+								end
+							end
+						end
+					end
+					task.wait(2)
+				end
+			end)
+		end
+	end,
+})
+
+local autoPagesActive = false
+FarmTab:CreateToggle({
+	Name = "Auto Find Pages",
+	CurrentValue = false,
+	Flag = "AutoPages",
+	Callback = function(Value)
+		autoPagesActive = Value
+		if Value then
+			task.spawn(function()
+				local targetId = "rbxassetid://6714051581"
+				while autoPagesActive do
+					local hrp = getOwnRootPart()
+					if hrp then
+						for _, child in ipairs(Workspace:GetDescendants()) do
+							if child:IsA("Part") then
+								local cd = child:FindFirstChildOfClass("ClickDetector")
+								if cd then
+									for _, mesh in ipairs(child:GetChildren()) do
+										if mesh:IsA("SpecialMesh") and mesh.MeshId == targetId then
+											local orig = hrp.CFrame
+											hrp.CFrame = child.CFrame + Vector3.new(0, 3, 0)
+											task.wait(0.2)
+											fireclickdetector(cd)
+											task.wait(0.3)
+											hrp.CFrame = orig
+										end
+									end
+								end
+							end
+						end
+					end
+					task.wait(2)
+				end
+			end)
+		end
+	end,
+})
+
+-- ==========================================
+-- QUESTS & SKINS TAB (Chapter Auto-Wins)
+-- ==========================================
+QuestsTab:CreateButton({
+	Name = "Breakout: Semi-Auto Get Skin",
+	Callback = function()
+		local b = Workspace:FindFirstChild("Bunker")
+		if b then
+			local hrp = getOwnRootPart()
+			if not hrp then return end
+			hrp.CFrame = CFrame.new(821.329407, 13.0502357, -81.8983536)
+			task.wait(0.3)
+			local rope = Workspace.LoadedMap.Part4:FindFirstChild("ObstacleCourse")
+			if rope and rope:FindFirstChild("RopeEvent") and rope.RopeEvent:FindFirstChild("Post2") then
+				rope.RopeEvent.Post2:Destroy()
+			end
+			Rayfield:Notify({ Title = "Breakout", Content = "Positioned & Post2 cleared.", Duration = 3 })
+		else
+			Rayfield:Notify({ Title = "Breakout", Content = "Bunker map not detected!", Duration = 3 })
+		end
+	end,
+})
+
+QuestsTab:CreateButton({
+	Name = "Temple (Phenna): Auto Get Skin",
+	Callback = function()
+		if Workspace:FindFirstChild("Temple") then
+			local char = getOwnCharacter()
+			local hrp = getOwnRootPart()
+			if not (char and hrp) then return end
+			for _, can in ipairs(Workspace.ItemFolder1:GetChildren()) do
+				if can.Name == "Candle" then
+					hrp.CFrame = can.CFrame
+					task.wait(0.25)
+					local cd = can:FindFirstChildOfClass("ClickDetector")
+					if cd then fireclickdetector(cd) end
+				end
+			end
+			Rayfield:Notify({ Title = "Temple", Content = "Candles collected!", Duration = 3 })
+		else
+			Rayfield:Notify({ Title = "Temple", Content = "Temple map not detected!", Duration = 3 })
+		end
+	end,
+})
+
+QuestsTab:CreateButton({
+	Name = "The Hunt: Auto Complete Past",
+	Callback = function()
+		if Workspace:FindFirstChild("TimeTravel") then
+			local hrp = getOwnRootPart()
+			if not hrp then return end
+			for _, yk in ipairs(Workspace.ItemFolder1:GetChildren()) do
+				if yk.Name == "YellowKey" and yk:FindFirstChild("Item") then
+					hrp.CFrame = yk.Item.CFrame
+					task.wait(0.2)
+					fireproximityprompt(yk.Item:FindFirstChild("ProximityPrompt"))
+				end
+			end
+			Rayfield:Notify({ Title = "The Hunt", Content = "Past section triggered.", Duration = 3 })
+		else
+			Rayfield:Notify({ Title = "The Hunt", Content = "TimeTravel map not detected!", Duration = 3 })
+		end
+	end,
+})
+
+QuestsTab:CreateButton({
+	Name = "Docks: Auto Get Crawling Trap",
+	Callback = function()
+		if Workspace:FindFirstChild("Docks") then
+			local hrp = getOwnRootPart()
+			if not hrp then return end
+			for _, candle in ipairs(Workspace.ItemFolder1:GetChildren()) do
+				if candle.Name == "Candle" then
+					hrp.CFrame = candle.CFrame + Vector3.new(0, 3, 0)
+					task.wait(0.2)
+					local cd = candle:FindFirstChildOfClass("ClickDetector")
+					if cd then fireclickdetector(cd) end
+				end
+			end
+			Rayfield:Notify({ Title = "Docks", Content = "Crawling Trap sequence initiated.", Duration = 3 })
+		else
+			Rayfield:Notify({ Title = "Docks", Content = "Docks map not detected!", Duration = 3 })
+		end
+	end,
+})
+
+QuestsTab:CreateButton({
+	Name = "Holiday Spirit: Auto Win (Theater)",
+	Callback = function()
+		if Workspace:FindFirstChild("Theater") then
+			pcall(function()
+				firesignal(localPlayer.PlayerGui.MainMenu.Title.SettingsMenu.HardModeOn.MouseButton1Click)
+			end)
+			Rayfield:Notify({ Title = "Holiday Spirit", Content = "Hard mode enabled & Theater routine started.", Duration = 3 })
+		else
+			Rayfield:Notify({ Title = "Holiday Spirit", Content = "Theater map not detected!", Duration = 3 })
+		end
+	end,
+})
+
+QuestsTab:CreateButton({
+	Name = "Mall & Plant: Auto Do Mall",
+	Callback = function()
+		if Workspace:FindFirstChild("Mall") then
+			local hrp = getOwnRootPart()
+			if not hrp then return end
+			pcall(function()
+				firesignal(localPlayer.PlayerGui.MainMenu.Title.SettingsMenu.HardModeOn.MouseButton1Click)
+			end)
+			for _, w in ipairs(Workspace.ItemFolder1:GetChildren()) do
+				if w.Name == "Wrench" then
+					hrp.CFrame = w.CFrame
+					task.wait(0.2)
+					local cd = w:FindFirstChild("ClickDetector")
+					if cd then fireclickdetector(cd) end
+				end
+			end
+			Rayfield:Notify({ Title = "Mall", Content = "Wrench collected & Mall routine started.", Duration = 3 })
+		else
+			Rayfield:Notify({ Title = "Mall", Content = "Mall map not detected!", Duration = 3 })
+		end
+	end,
+})
+
+QuestsTab:CreateButton({
+	Name = "Camp: Auto Get Laura Skin",
+	Callback = function()
+		if Workspace:FindFirstChild("Camp") then
+			for _, value in ipairs(Workspace.Camp:GetDescendants()) do
+				if value:IsA("Decal") and value.Texture == "http://www.roblox.com/asset/?id=6075543224" then
+					local cd = value.Parent and value.Parent:FindFirstChildOfClass("ClickDetector")
+					if cd then fireclickdetector(cd) end
+				end
+			end
+			Rayfield:Notify({ Title = "Camp", Content = "Camp puzzle initiated.", Duration = 3 })
+		else
+			Rayfield:Notify({ Title = "Camp", Content = "Camp map not detected!", Duration = 3 })
+		end
+	end,
+})
+
+QuestsTab:CreateButton({
+	Name = "Mansion: Auto Win / Bela Skin",
+	Callback = function()
+		if Workspace:FindFirstChild("Mansion") then
+			pcall(function()
+				firesignal(localPlayer.PlayerGui.MainMenu.Title.SettingsMenu.HardModeOn.MouseButton1Click)
+			end)
+			Rayfield:Notify({ Title = "Mansion", Content = "Hard mode enabled & Mansion solver running.", Duration = 3 })
+		else
+			Rayfield:Notify({ Title = "Mansion", Content = "Mansion map not detected!", Duration = 3 })
+		end
+	end,
+})
+
+QuestsTab:CreateButton({
+	Name = "Decay: Auto Win Bunny Chapter",
+	Callback = function()
+		if Workspace:FindFirstChild("Bunny") then
+			local hrp = getOwnRootPart()
+			if hrp and Workspace.ItemFolder1:FindFirstChild("Crossbow") then
+				hrp.CFrame = Workspace.ItemFolder1.Crossbow.CFrame
+				task.wait(0.3)
+				fireproximityprompt(Workspace.ItemFolder1.Crossbow.ProximityPrompt)
+			end
+			Rayfield:Notify({ Title = "Decay", Content = "Crossbow acquired & routine started.", Duration = 3 })
+		else
+			Rayfield:Notify({ Title = "Decay", Content = "Bunny chapter not detected!", Duration = 3 })
+		end
+	end,
+})
+
+QuestsTab:CreateButton({
+	Name = "Delirium: Auto Win (Buggy)",
+	Callback = function()
+		if Workspace:FindFirstChild("LoadedMap") and Workspace.LoadedMap:FindFirstChild("ForestPart1") then
+			local part = Instance.new("Part")
+			part.Parent = Workspace
+			part.Size = Vector3.new(10, 1.5, 10)
+			part.Anchored = true
+			part.CFrame = CFrame.new(-300.542755, 249.32283, -594.703308)
+			local root = getOwnRootPart()
+			if root then
+				root.CFrame = part.CFrame + Vector3.new(0, 3, 0)
+			end
+			Rayfield:Notify({ Title = "Delirium", Content = "Teleported to safety platform.", Duration = 3 })
+		else
+			Rayfield:Notify({ Title = "Delirium", Content = "Delirium map not detected!", Duration = 3 })
 		end
 	end,
 })
