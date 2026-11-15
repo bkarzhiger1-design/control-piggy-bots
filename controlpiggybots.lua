@@ -301,3 +301,164 @@ ControlTab:CreateButton({
 		Rayfield:Notify({ Title = "Control Bots", Content = "Controlling " .. selectedNPC.Name .. ". " .. hint .. " Press Control NPC again to release.", Duration = 5 })
 	end,
 })
+
+-- */ Control NPC /* --
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local controlRemote = ReplicatedStorage:WaitForChild("ControlBotsRemote")
+
+local controlledRoot = nil
+local npcOriginalSpeed = nil
+
+local function stopControl()
+	if controlConnection then
+		controlConnection:Disconnect()
+		controlConnection = nil
+	end
+
+	if controlledHum and controlledHum.Parent then
+		controlledHum:Move(Vector3.zero, false)
+		if npcOriginalSpeed then
+			controlledHum.WalkSpeed = npcOriginalSpeed
+		end
+	end
+
+	if controlledNPC then
+		controlRemote:FireServer("stop", controlledNPC)
+	end
+
+	local ownHum = getOwnHumanoid()
+	if ownHum then
+		if savedOwnWalkSpeed then ownHum.WalkSpeed = savedOwnWalkSpeed end
+		if savedOwnJumpPower then ownHum.JumpPower = savedOwnJumpPower end
+		Workspace.CurrentCamera.CameraSubject = ownHum
+	end
+
+	if jumpGui then
+		jumpGui.Enabled = false
+	end
+
+	controlledNPC = nil
+	controlledHum = nil
+	controlledRoot = nil
+	npcOriginalSpeed = nil
+	savedOwnWalkSpeed = nil
+	savedOwnJumpPower = nil
+end
+
+local function startControl(model)
+	local hum = model:FindFirstChildOfClass("Humanoid")
+	local root = model:FindFirstChild("HumanoidRootPart")
+	if not hum or not root then return end
+
+	controlledNPC = model
+	controlledHum = hum
+	controlledRoot = root
+	npcOriginalSpeed = hum.WalkSpeed
+	viewingNPC = nil
+
+	-- Ask the server to take over this NPC's movement
+	controlRemote:FireServer("start", model)
+
+	-- Cancel the NPC's current path right away
+	hum:MoveTo(root.Position)
+
+	-- Stop your own character from moving while you control the NPC
+	local ownHum = getOwnHumanoid()
+	if ownHum then
+		savedOwnWalkSpeed = ownHum.WalkSpeed
+		savedOwnJumpPower = ownHum.JumpPower
+		ownHum.WalkSpeed = 0
+		ownHum.JumpPower = 0
+	end
+
+	createJumpGui()
+	jumpGui.Enabled = UserInputService.TouchEnabled
+
+	Workspace.CurrentCamera.CameraSubject = hum
+
+	-- Every frame: keep the NPC's speed fixed and apply only your input
+	controlConnection = RunService.Heartbeat:Connect(function()
+		if not controlledNPC or not controlledNPC.Parent
+			or not controlledHum or not controlledHum.Parent
+			or controlledHum.Health <= 0 then
+			stopControl()
+			return
+		end
+
+		controlledHum.WalkSpeed = npcOriginalSpeed
+		controlledHum:Move(getMoveDirection(), false)
+	end)
+end
+
+ControlTab:CreateButton({
+	Name = "Control NPC",
+	Callback = function()
+		if controlledNPC then
+			stopControl()
+			Rayfield:Notify({ Title = "Control Bots", Content = "You released the NPC.", Duration = 3 })
+			return
+		end
+		if not selectedNPC or not selectedNPC.Parent then
+			Rayfield:Notify({ Title = "Control Bots", Content = "Select an NPC from the list first.", Duration = 3 })
+			return
+		end
+		startControl(selectedNPC)
+		local hint = UserInputService.TouchEnabled and "Use the thumbstick and JUMP button." or "Use WASD and Space."
+		Rayfield:Notify({ Title = "Control Bots", Content = "Controlling " .. selectedNPC.Name .. ". " .. hint .. " Press Control NPC again to release.", Duration = 5 })
+	end,
+})
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+
+local controlRemote = ReplicatedStorage:FindFirstChild("ControlBotsRemote")
+if not controlRemote then
+	controlRemote = Instance.new("RemoteEvent")
+	controlRemote.Name = "ControlBotsRemote"
+	controlRemote.Parent = ReplicatedStorage
+end
+
+-- model -> player who is controlling it
+local owners = {}
+
+local function releaseNPC(model)
+	local root = model:FindFirstChild("HumanoidRootPart")
+	owners[model] = nil
+	model:SetAttribute("ControlledBy", nil)
+	if root then
+		pcall(function()
+			root:SetNetworkOwner(nil)
+		end)
+	end
+end
+
+controlRemote.OnServerEvent:Connect(function(player, action, model)
+	if typeof(model) ~= "Instance" or not model:IsA("Model") then return end
+	if Players:GetPlayerFromCharacter(model) then return end
+
+	local hum = model:FindFirstChildOfClass("Humanoid")
+	local root = model:FindFirstChild("HumanoidRootPart")
+	if not hum or not root then return end
+
+	if action == "start" then
+		if owners[model] then return end
+		owners[model] = player
+		model:SetAttribute("ControlledBy", player.UserId)
+		hum:MoveTo(root.Position)
+		pcall(function()
+			root:SetNetworkOwner(player)
+		end)
+	elseif action == "stop" then
+		if owners[model] == player then
+			releaseNPC(model)
+		end
+	end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	for model, owner in pairs(owners) do
+		if owner == player then
+			releaseNPC(model)
+		end
+	end
+end)
