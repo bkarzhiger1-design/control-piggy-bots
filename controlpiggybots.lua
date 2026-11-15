@@ -5,12 +5,10 @@ local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local HttpService = game:GetService("HttpService")
 
 local localPlayer = Players.LocalPlayer
 local mouse = localPlayer:GetMouse()
 local Camera = Workspace.CurrentCamera
-local UNDER_OFFSET = 11
 
 -- Setup Humanoid & SimulationRadius
 local function setupHumanoid(character)
@@ -46,9 +44,9 @@ end
 
 -- Create Rayfield Window
 local Window = Rayfield:CreateWindow({
-	Name = "Boost Hub",
-	LoadingTitle = "Loading...",
-	LoadingSubtitle = "Boost Hub",
+	Name = "Control Bots & Veno Hub",
+	LoadingTitle = "Control Bots",
+	LoadingSubtitle = "Original Control Panel & Utilities",
 	ConfigurationSaving = { Enabled = false },
 	Discord = { Enabled = false },
 	KeySystem = false,
@@ -63,564 +61,753 @@ local QuestsTab = Window:CreateTab("Quests & Skins")
 local FarmTab = Window:CreateTab("Farming & Items")
 
 -- ==========================================
--- CONTROL TAB (Combined Physics Control + Legacy Mode + View NPC)
+-- CONTROL TAB (Exact Original Control Piggy Bots [REWORK] from Old Script)
 -- ==========================================
-local selectedNPC = nil
-local npcMap = {}
-local viewingNPC = nil
-local jumpGui = nil
+ControlTab:CreateButton({
+	Name = "Launch Original Control Panel",
+	Callback = function()
+		-- Exact original code block from myveryoldscript.txt for Control Piggy Bots [REWORK]
+		pcall(function()
+			local inf, pi = math.huge, math.pi
 
-local Controlling = false
-local CurrentlyControlledNPC = nil
-local OriginalProperties = {}
-local DisposableInstances = {}
-local OriginalPosition = nil
-local ControlMode = "Normal" -- "Normal" or "Killer"
-local ClickToControlEnabled = false
-
-local DummyModel, DummyRootPart = nil, nil
-local NPCModel, NPCRootPart, NPCHighlighter = nil, nil, nil
-local DummyDiedConnection, ClientHealthChangedConnection = nil, nil
-local PhysicsHeartbeatConn = nil
-
-local function getOwnCharacter()
-	return localPlayer.Character
-end
-
-local function getOwnHumanoid()
-	local char = getOwnCharacter()
-	return char and char:FindFirstChildOfClass("Humanoid")
-end
-
-local function getOwnRootPart()
-	local char = getOwnCharacter()
-	return char and char:FindFirstChild("HumanoidRootPart")
-end
-
-local function CreateDisposableInstance(className, properties)
-	properties = properties or {}
-	local instance = Instance.new(className)
-	table.insert(DisposableInstances, instance)
-	for name, value in pairs(properties) do
-		instance[name] = value
-	end
-	return instance
-end
-
-local ClientHighlighter = CreateDisposableInstance("Highlight", {
-	FillTransparency = 1,
-	OutlineColor = Color3.fromRGB(75, 150, 255),
-	Enabled = false,
-})
-
-local ClientAttachment = CreateDisposableInstance("Attachment")
-local DummyAttachment = CreateDisposableInstance("Attachment")
-local NPCAttachment = CreateDisposableInstance("Attachment")
-
-local ClientVelocity = CreateDisposableInstance("LinearVelocity", {
-	Attachment0 = ClientAttachment,
-	MaxForce = math.huge,
-	Enabled = false,
-	Parent = Workspace,
-})
-
-local NPCAlignPosition = CreateDisposableInstance("AlignPosition", {
-	ApplyAtCenterOfMass = false,
-	Attachment0 = NPCAttachment,
-	Attachment1 = DummyAttachment,
-	MaxForce = math.huge,
-	Responsiveness = math.huge,
-	Enabled = false,
-	Parent = Workspace,
-})
-
-local NPCAlignOrientation = CreateDisposableInstance("AlignOrientation", {
-	MaxTorque = math.huge,
-	Responsiveness = math.huge,
-	Attachment0 = NPCAttachment,
-	Attachment1 = DummyAttachment,
-	Enabled = false,
-	Parent = Workspace,
-})
-
-local function SetOriginalProperty(instance, name, value)
-	local instanceOriginalProperties = OriginalProperties[instance] or {}
-	if instanceOriginalProperties[name] == nil then
-		instanceOriginalProperties[name] = value
-	end
-	OriginalProperties[instance] = instanceOriginalProperties
-end
-
-local function SetCameraSubject(subject)
-	local camera = Workspace.CurrentCamera
-	if camera and subject then
-		camera.CameraSubject = subject
-	end
-end
-
-local function jumpControlledNPC()
-	if DummyModel then
-		local dHum = DummyModel:FindFirstChildOfClass("Humanoid")
-		if dHum and dHum.Health > 0 then
-			dHum:ChangeState(Enum.HumanoidStateType.Jumping)
-		end
-	end
-end
-
-local function createJumpGui()
-	if jumpGui then return end
-
-	local gui = Instance.new("ScreenGui")
-	gui.Name = "ControlBotsJump"
-	gui.ResetOnSpawn = false
-	gui.Enabled = false
-
-	local button = Instance.new("TextButton")
-	button.Size = UDim2.fromOffset(90, 90)
-	button.Position = UDim2.new(1, -120, 1, -170)
-	button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-	button.BackgroundTransparency = 0.3
-	button.TextColor3 = Color3.new(1, 1, 1)
-	button.Text = "JUMP"
-	button.TextScaled = true
-	button.Parent = gui
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(1, 0)
-	corner.Parent = button
-
-	button.Activated:Connect(jumpControlledNPC)
-
-	gui.Parent = localPlayer:WaitForChild("PlayerGui")
-	jumpGui = gui
-end
-
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed or not Controlling then return end
-	if input.KeyCode == Enum.KeyCode.Space then
-		jumpControlledNPC()
-	end
-end)
-
-local function StopControlling(restorePosition)
-	Controlling = false
-	CurrentlyControlledNPC = nil
-
-	if PhysicsHeartbeatConn then
-		PhysicsHeartbeatConn:Disconnect()
-		PhysicsHeartbeatConn = nil
-	end
-
-	if ClientHealthChangedConnection then
-		ClientHealthChangedConnection:Disconnect()
-		ClientHealthChangedConnection = nil
-	end
-
-	if DummyDiedConnection then
-		DummyDiedConnection:Disconnect()
-		DummyDiedConnection = nil
-	end
-
-	NPCAlignPosition.Enabled = false
-	NPCAlignOrientation.Enabled = false
-	ClientVelocity.Enabled = false
-
-	local char = getOwnCharacter()
-	local hum = getOwnHumanoid()
-	local hrp = getOwnRootPart()
-
-	if char and hum then
-		localPlayer.Character = char
-		SetCameraSubject(hum)
-	end
-
-	DummyAttachment.Parent = nil
-	NPCAttachment.Parent = nil
-
-	if DummyModel then
-		DummyModel:Destroy()
-		DummyModel = nil
-	end
-	DummyRootPart = nil
-
-	if NPCHighlighter then
-		NPCHighlighter:Destroy()
-		NPCHighlighter = nil
-	end
-
-	NPCModel = nil
-	NPCRootPart = nil
-
-	if jumpGui then
-		jumpGui.Enabled = false
-	end
-
-	if hum and hum.Health > 0 then
-		if restorePosition and OriginalPosition and hrp then
-			hrp.CFrame = OriginalPosition
-			OriginalPosition = nil
-		end
-
-		for instance, originalProperties in pairs(OriginalProperties) do
-			if instance and instance.Parent then
-				for name, value in pairs(originalProperties) do
-					pcall(function() instance[name] = value end)
-				end
+			local playerGui = localPlayer:FindFirstChild("PlayerGui")
+			if playerGui and playerGui:FindFirstChild("GameGUI") then
+				playerGui.GameGUI.ResetOnSpawn = false
 			end
-			OriginalProperties[instance] = nil
-		end
 
-		if char then
-			for _, part in ipairs(char:GetChildren()) do
-				if part:IsA("BasePart") then
-					part.CanTouch = true
-					part.CanCollide = true
+			local Client = localPlayer
+			local Character = Client.Character or Client.CharacterAdded:Wait()
+			local Humanoid = Character:WaitForChild("Humanoid")
+			local HumanoidRootPart = Humanoid.RootPart
+			local Mouse = Client:GetMouse()
+			local RunService = game:GetService("RunService")
+			local UserInputService = game:GetService("UserInputService")
+
+			local Controlling = false
+			local CurrentlyControlledNPC = nil
+			local OriginalProperties = {}
+			local DisposableInstances = {}
+			local OriginalPosition
+			local CurrentMode = 1
+
+			local Connections = {}
+			local ScreenGui
+
+			local ToggleEnabled = true
+			local lastChar = Character
+
+			local function CreateDisposableInstance(className, properties)
+				properties = properties or {}
+				local instance = Instance.new(className)
+				table.insert(DisposableInstances, instance)
+				for name, value in pairs(properties) do
+					instance[name] = value
 				end
+				return instance
 			end
-		end
 
-		ClientHighlighter.Enabled = false
-		hum.PlatformStand = false
-	end
-end
+			local ClientHighligher = CreateDisposableInstance("Highlight", {
+				FillTransparency = 1,
+				OutlineColor = Color3.fromRGB(75, 150, 255),
+				Enabled = false,
+				Parent = Character
+			})
 
-local function StartControlling(npcModel)
-	if Controlling then
-		StopControlling(true)
-	end
-	if not npcModel or not npcModel.Parent then return end
+			local ClientAttachment = CreateDisposableInstance("Attachment", {Parent = HumanoidRootPart})
+			local DummyAttachment = CreateDisposableInstance("Attachment")
+			local NPCAttachment = CreateDisposableInstance("Attachment")
 
-	local npcHumanoid = npcModel:FindFirstChildOfClass("Humanoid")
-	local npcRootPart = npcHumanoid and (npcHumanoid.RootPart or npcModel:FindFirstChild("HumanoidRootPart"))
-	local char = getOwnCharacter()
-	local hum = getOwnHumanoid()
-	local hrp = getOwnRootPart()
+			local ClientVelocity = CreateDisposableInstance("LinearVelocity", {
+				Attachment0 = ClientAttachment,
+				MaxForce = inf,
+				Enabled = false,
+				Parent = Workspace
+			})
 
-	if not (npcRootPart and npcHumanoid and char and hum and hrp) then return end
-	if Players:GetPlayerFromCharacter(npcModel) or npcModel == char then return end
+			local ClientAlignOrientation = CreateDisposableInstance("AlignOrientation", {
+				MaxTorque = inf,
+				Responsiveness = inf,
+				Attachment0 = ClientAttachment,
+				Attachment1 = NPCAttachment,
+				Enabled = false,
+				Parent = Workspace
+			})
 
-	viewingNPC = nil
-	CurrentlyControlledNPC = npcModel
-	OriginalPosition = hrp.CFrame
+			local NPCAlignPosition = CreateDisposableInstance("AlignPosition", {
+				ApplyAtCenterOfMass = false,
+				Attachment0 = NPCAttachment,
+				Attachment1 = DummyAttachment,
+				MaxForce = inf,
+				Responsiveness = inf,
+				Enabled = false,
+				Parent = Workspace
+			})
 
-	ClientHighlighter.Parent = char
-	ClientHighlighter.Enabled = true
-	ClientAttachment.Parent = hrp
-	SetOriginalProperty(hrp, "CFrame", hrp.CFrame)
+			local NPCAlignOrientation = CreateDisposableInstance("AlignOrientation", {
+				MaxTorque = inf,
+				Responsiveness = inf,
+				Attachment0 = NPCAttachment,
+				Attachment1 = DummyAttachment,
+				Enabled = false,
+				Parent = Workspace
+			})
 
-	hum.PlatformStand = true
+			local DummyModel, DummyRootPart
+			local NPCModel, NPCRootPart, NPCName, NPCHighlighter
+			local DummyDiedConnection, ClientHealthChangedConnection
 
-	for _, part in ipairs(char:GetChildren()) do
-		if part:IsA("BasePart") then
-			part.CanTouch = false
-			part.CanCollide = false
-		end
-	end
+			local function SetOriginalProperty(instance, name, value)
+				local instanceOriginalProperties = OriginalProperties[instance] or {}
+				instanceOriginalProperties[name] = value
+				OriginalProperties[instance] = instanceOriginalProperties
+			end
 
-	pcall(function() npcRootPart.BodyPosition:Destroy() end)
-	pcall(function() npcRootPart.BodyGyro:Destroy() end)
-
-	local dummyModel = npcModel:Clone()
-	local dummyHumanoid = dummyModel:FindFirstChildOfClass("Humanoid")
-	local dummyRootPart = dummyModel:FindFirstChild(npcRootPart.Name) or dummyModel:FindFirstChild("HumanoidRootPart")
-
-	if not dummyHumanoid or not dummyRootPart then
-		hum.PlatformStand = false
-		ClientHighlighter.Enabled = false
-		CurrentlyControlledNPC = nil
-		return
-	end
-
-	if ControlMode == "Normal" then
-		DummyDiedConnection = dummyHumanoid.Died:Once(function()
-			if Controlling then StopControlling(true) end
-		end)
-	else
-		DummyDiedConnection = dummyHumanoid.Died:Once(function()
-			if Controlling and hum then hum.Health = 0 end
-		end)
-	end
-
-	local function updateHealth()
-		if Controlling and hum and dummyHumanoid then
-			dummyHumanoid.MaxHealth = math.huge
-			dummyHumanoid.Health = math.huge
-			hum.Health = math.huge
-		end
-	end
-
-	ClientHealthChangedConnection = hum.Changed:Connect(updateHealth)
-	updateHealth()
-
-	for _, descendant in pairs(dummyModel:GetDescendants()) do
-		if descendant:IsA("Light") or descendant:IsA("Sound") then
-			descendant:Destroy()
-		elseif descendant:IsA("BasePart") then
-			descendant.Transparency = 0.95
-			descendant.CanCollide = false
-			descendant.CanTouch = false
-		end
-	end
-
-	DummyModel = dummyModel
-	DummyRootPart = dummyRootPart
-	dummyModel.Parent = Workspace
-
-	DummyAttachment.Parent = dummyRootPart
-	NPCAttachment.Parent = npcRootPart
-
-	NPCModel = npcModel
-	NPCRootPart = npcRootPart
-
-	NPCHighlighter = Instance.new("Highlight")
-	NPCHighlighter.FillTransparency = 1
-	NPCHighlighter.OutlineColor = Color3.fromRGB(255, 0, 0)
-	NPCHighlighter.Parent = npcModel
-
-	local DummyHighlighter = Instance.new("Highlight")
-	DummyHighlighter.FillTransparency = 1
-	DummyHighlighter.OutlineColor = Color3.fromRGB(128, 0, 128)
-	DummyHighlighter.Parent = dummyModel
-
-	createJumpGui()
-	jumpGui.Enabled = UserInputService.TouchEnabled
-
-	SetCameraSubject(dummyHumanoid)
-	localPlayer.Character = dummyModel
-
-	NPCAlignPosition.Enabled = true
-	NPCAlignOrientation.Enabled = true
-	ClientVelocity.Enabled = true
-	Controlling = true
-
-	PhysicsHeartbeatConn = RunService.Heartbeat:Connect(function()
-		if not Controlling then return end
-
-		local currentChar = getOwnCharacter()
-		local currentHrp = getOwnRootPart()
-		local currentHum = getOwnHumanoid()
-
-		if not NPCRootPart or not NPCRootPart.Parent
-			or not currentHrp or not currentHrp.Parent
-			or not currentHum or currentHum.Health <= 0 then
-			StopControlling(true)
-			return
-		end
-
-		if type(sethiddenproperty) == "function" then
-			pcall(function() sethiddenproperty(localPlayer, "SimulationRadius", math.huge) end)
-		elseif type(setsimulationradius) == "function" then
-			pcall(function() setsimulationradius(math.huge) end)
-		end
-
-		local npcPos = NPCRootPart.Position
-		currentHrp.CFrame = CFrame.new(npcPos.X, npcPos.Y - UNDER_OFFSET, npcPos.Z) * NPCRootPart.CFrame.Rotation
-
-		if currentChar then
-			for _, child in pairs(currentChar:GetChildren()) do
-				if child:IsA("BasePart") then
-					if child.CanCollide then
-						SetOriginalProperty(child, "CanCollide", true)
-						child.CanCollide = false
-					end
-					if child.CanTouch then
-						SetOriginalProperty(child, "CanTouch", true)
-						child.CanTouch = false
+			local function SetCameraSubject(subject)
+				while task.wait() do
+					local camera = Workspace.CurrentCamera
+					if camera then
+						camera.CameraSubject = subject
+						return
 					end
 				end
 			end
-		end
 
-		if NPCModel then
-			for _, child in pairs(NPCModel:GetChildren()) do
-				if child:IsA("BasePart") and child.CanCollide then
-					SetOriginalProperty(child, "CanCollide", true)
-					child.CanCollide = false
+			Client.CharacterAdded:Connect(function(newCharacter)
+				local wasDeath = false
+				if lastChar then
+					local oldHumanoid = lastChar:FindFirstChildOfClass("Humanoid")
+					if oldHumanoid and oldHumanoid.Health <= 0 then
+						wasDeath = true
+					end
 				end
-			end
-		end
-	end)
-end
 
--- Killer Mode Loop
-task.spawn(function()
-	while true do
-		task.wait(0.5)
-		if not Controlling or ControlMode ~= "Killer" then continue end
-		if not NPCModel or not DummyRootPart then continue end
+				if wasDeath then
+					Character = newCharacter
+					Humanoid = newCharacter:WaitForChild("Humanoid")
+					HumanoidRootPart = Humanoid.RootPart
 
-		for _, objc in ipairs(NPCModel:GetDescendants()) do
-			if objc:IsA("TouchTransmitter") or objc:IsA("Script") then
-				objc:Destroy()
-			end
-		end
+					ClientHighligher.Parent = Character
+					ClientAttachment.Parent = HumanoidRootPart
 
-		local closestRootPart = nil
-		local closestDist = math.huge
-		local mainSpawn = Workspace:FindFirstChild("GameFolder") and Workspace.GameFolder:FindFirstChild("MainSpawn")
+					Humanoid.Died:Once(function()
+						StopControlling()
+					end)
+				end
 
-		for _, plr in ipairs(Players:GetPlayers()) do
-			if plr ~= localPlayer and plr.Character
-				and not plr.Character:FindFirstChild("Enemy")
-				and not plr.Character:FindFirstChild("Traitor") then
-				local rPart = plr.Character:FindFirstChild("HumanoidRootPart")
-				if rPart then
-					if mainSpawn then
-						local dist = (rPart.Position - mainSpawn.Position).Magnitude
-						if dist >= 20 and dist < closestDist then
-							closestDist = dist
-							closestRootPart = rPart
-						end
+				lastChar = newCharacter
+			end)
+
+			local function StopControlling(restorePosition)
+				Controlling = false
+				CurrentlyControlledNPC = nil
+
+				if ClientHealthChangedConnection then
+					ClientHealthChangedConnection:Disconnect()
+					ClientHealthChangedConnection = nil
+				end
+
+				if DummyDiedConnection then
+					DummyDiedConnection:Disconnect()
+					DummyDiedConnection = nil
+				end
+
+				NPCAlignPosition.Enabled = false
+				NPCAlignOrientation.Enabled = false
+				ClientVelocity.Enabled = false
+				ClientAlignOrientation.Enabled = false
+
+				if CurrentMode == 2 then
+					if Character then
+						SetCameraSubject(Humanoid)
+						Client.Character = Character
 					else
-						closestRootPart = rPart
+						for _, Newchar in pairs(Workspace:GetDescendants()) do
+							if Newchar.Name == Client.Name then
+								Client.Character = Newchar
+								SetCameraSubject(Newchar:FindFirstChildOfClass("Humanoid"))
+								HumanoidRootPart = Newchar:FindFirstChild("HumanoidRootPart")
+								Humanoid = Newchar:FindFirstChildOfClass("Humanoid")
+							end
+						end
+					end
+				else
+					SetCameraSubject(Humanoid)
+					Client.Character = Character
+				end
+
+				DummyAttachment.Parent = nil
+				NPCAttachment.Parent = nil
+
+				if DummyModel then
+					DummyModel:Destroy()
+					DummyModel = nil
+				end
+				DummyRootPart = nil
+
+				if NPCHighlighter then
+					NPCHighlighter:Destroy()
+					NPCHighlighter = nil
+				end
+
+				NPCModel = nil
+				NPCRootPart = nil
+				NPCName = nil
+
+				if Humanoid.Health > 0 then
+					if restorePosition and OriginalPosition then
+						HumanoidRootPart.CFrame = OriginalPosition
+						OriginalPosition = nil
+					end
+
+					for instance, originalProperties in pairs(OriginalProperties) do
+						for name, value in pairs(originalProperties) do
+							pcall(function() instance[name] = value end)
+						end
+						OriginalProperties[instance] = nil
+					end
+
+					if game.Players.LocalPlayer.Character:FindFirstChild("Energy") and game.Players.LocalPlayer.Character:FindFirstChild("Energy").Value == 100 then
+						game.Players.LocalPlayer.Character:FindFirstChild("Energy").Value = 99
+						game.Players.LocalPlayer.Character:FindFirstChild("Energy").Value = 100
+					end
+
+					local player = game.Players.LocalPlayer
+					local character = player.Character or player.CharacterAdded:Wait()
+
+					for _, part in ipairs(character:GetChildren()) do
+						if part:IsA("BasePart") then
+							part.CanTouch = true
+						end
+					end
+
+					ClientHighligher.Enabled = false
+					Humanoid.PlatformStand = false
+				end
+			end
+
+			local function Control(npcModel)
+				if Controlling then return end
+				if CurrentlyControlledNPC == npcModel then return end
+
+				local npcHumanoid = npcModel:FindFirstChildOfClass("Humanoid")
+				local npcRootPart = npcHumanoid and npcHumanoid.RootPart
+
+				if npcRootPart and npcHumanoid then
+					local player = game.Players:GetPlayerFromCharacter(npcModel)
+					if player then return end
+					if npcModel == Character then return end
+
+					CurrentlyControlledNPC = npcModel
+					OriginalPosition = HumanoidRootPart.CFrame
+
+					ClientHighligher.Enabled = true
+					SetOriginalProperty(HumanoidRootPart, "CFrame", HumanoidRootPart.CFrame)
+
+					Humanoid.PlatformStand = true
+
+					local localPlayer = game.Players.LocalPlayer
+					local localCharacter = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+
+					for _, part in ipairs(localCharacter:GetChildren()) do
+						if part:IsA("BasePart") then
+							part.CanTouch = false
+						end
+					end
+
+					task.wait(0.5)
+
+					if not Humanoid or Humanoid.Health <= 0
+						or not HumanoidRootPart or not HumanoidRootPart.Parent
+						or not npcRootPart or not npcRootPart.Parent then
+						CurrentlyControlledNPC = nil
+						pcall(function() Humanoid.PlatformStand = false end)
+						ClientHighligher.Enabled = false
+						for _, part in ipairs(Character:GetChildren()) do
+							if part:IsA("BasePart") then
+								part.CanTouch = true
+							end
+						end
+						return
+					end
+
+					pcall(function() npcRootPart.BodyPosition:Destroy() end)
+					pcall(function() npcRootPart.BodyGyro:Destroy() end)
+
+					local dummyModel = npcModel:Clone()
+					local dummyHumanoid = dummyModel:FindFirstChildOfClass("Humanoid")
+					local dummyRootPart = dummyModel:FindFirstChild(npcRootPart.Name)
+
+					if CurrentMode == 1 then
+						DummyDiedConnection = dummyHumanoid.Died:Once(function()
+							if Controlling then StopControlling(true) end
+						end)
+					else
+						DummyDiedConnection = dummyHumanoid.Died:Once(function()
+							if Controlling then Humanoid.Health = 0 end
+						end)
+					end
+
+					local function updateHealth()
+						if Controlling then
+							dummyHumanoid.MaxHealth = inf
+							dummyHumanoid.Health = inf
+							Humanoid.Health = inf
+						end
+					end
+
+					ClientHealthChangedConnection = Humanoid.Changed:Connect(updateHealth)
+					updateHealth()
+
+					for _, descendant in pairs(dummyModel:GetDescendants()) do
+						if descendant:IsA("Light") or descendant:IsA("Sound") then
+							descendant:Destroy()
+						else
+							pcall(function() descendant.Transparency = 0.95 end)
+						end
+					end
+
+					DummyModel = dummyModel
+					DummyRootPart = dummyRootPart
+					dummyModel.Parent = Workspace
+
+					DummyAttachment.Parent = dummyRootPart
+					NPCAttachment.Parent = npcRootPart
+
+					NPCModel = npcModel
+					NPCRootPart = npcRootPart
+					NPCName = npcModel.Name
+
+					NPCHighlighter = Instance.new("Highlight")
+					NPCHighlighter.FillTransparency = 1
+					NPCHighlighter.OutlineColor = Color3.fromRGB(255, 0, 0)
+					NPCHighlighter.Parent = npcModel
+
+					local DummyHighlighter = Instance.new("Highlight")
+					DummyHighlighter.FillTransparency = 1
+					DummyHighlighter.OutlineColor = Color3.fromRGB(128, 0, 128)
+					DummyHighlighter.Parent = dummyModel
+
+					SetCameraSubject(dummyHumanoid)
+					Client.Character = dummyModel
+
+					NPCAlignPosition.Enabled = true
+					NPCAlignOrientation.Enabled = true
+					ClientAlignOrientation.Enabled = false
+					ClientVelocity.Enabled = true
+					Controlling = true
+				end
+			end
+
+			task.spawn(function()
+				while true do
+					task.wait(0.5)
+					if not Controlling or not ToggleEnabled or CurrentMode ~= 2 then continue end
+
+					local npcModel = NPCModel
+					local dummyRootPart = DummyRootPart
+					if not npcModel or not dummyRootPart then continue end
+
+					for _, objc in ipairs(npcModel:GetDescendants()) do
+						if objc:IsA("TouchTransmitter") then
+							objc:Destroy()
+						end
+					end
+					for _, objc in ipairs(npcModel:GetDescendants()) do
+						if objc:IsA("Script") then
+							objc:Destroy()
+						end
+					end
+
+					local closestRootPart = nil
+					local closestDist = math.huge
+
+					local mainSpawn = Workspace:FindFirstChild("GameFolder")
+						and Workspace.GameFolder:FindFirstChild("MainSpawn")
+
+					for _, player in ipairs(game.Players:GetPlayers()) do
+						if player ~= Client
+							and player.Character
+							and not player.Character:FindFirstChild("Enemy")
+							and not player.Character:FindFirstChild("Traitor") then
+
+							local rootPart = player.Character:FindFirstChild("HumanoidRootPart")
+							if rootPart then
+								if mainSpawn then
+									local dist = (rootPart.Position - mainSpawn.Position).Magnitude
+									if dist >= 20 and dist < closestDist then
+										closestDist = dist
+										closestRootPart = rootPart
+									end
+								else
+									closestRootPart = rootPart
+									break
+								end
+							end
+						end
+					end
+
+					if closestRootPart then
+						dummyRootPart.CFrame = closestRootPart.CFrame * CFrame.new(0, 2, -9)
+					end
+				end
+			end)
+
+			local function DestroyEverything()
+				StopControlling(false)
+
+				for _, connection in pairs(Connections) do
+					pcall(function() connection:Disconnect() end)
+				end
+				Connections = {}
+
+				for _, instance in pairs(DisposableInstances) do
+					pcall(function() instance:Destroy() end)
+				end
+				DisposableInstances = {}
+
+				if ScreenGui then
+					ScreenGui:Destroy()
+					ScreenGui = nil
+				end
+			end
+
+			ScreenGui = Instance.new("ScreenGui")
+			ScreenGui.Name = "PiggyBotGui"
+			ScreenGui.ResetOnSpawn = false
+			ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+			ScreenGui.Parent = Client.PlayerGui
+
+			local MiniButton = Instance.new("TextButton")
+			MiniButton.Name = "MiniToggle"
+			MiniButton.Size = UDim2.new(0, 56, 0, 56)
+			MiniButton.Position = UDim2.new(1, -68, 0, 60)
+			MiniButton.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+			MiniButton.BackgroundTransparency = 0.3
+			MiniButton.BorderSizePixel = 0
+			MiniButton.Text = "🐷"
+			MiniButton.TextSize = 28
+			MiniButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+			MiniButton.FontFace = Font.new("rbxasset://fonts/families/Ubuntu.json", Enum.FontWeight.Bold)
+			MiniButton.ZIndex = 12
+			MiniButton.AutoButtonColor = false
+			MiniButton.Parent = ScreenGui
+			Instance.new("UICorner", MiniButton).CornerRadius = UDim.new(0, 10)
+			local MiniStroke = Instance.new("UIStroke", MiniButton)
+			MiniStroke.Color = Color3.fromRGB(80, 80, 80)
+			MiniStroke.Thickness = 1
+
+			local MainFrame = Instance.new("Frame")
+			MainFrame.Name = "MainPanel"
+			MainFrame.Size = UDim2.new(0, 200, 0, 120)
+			MainFrame.Position = UDim2.new(1, -276, 0, 56)
+			MainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+			MainFrame.BackgroundTransparency = 0.15
+			MainFrame.BorderSizePixel = 0
+			MainFrame.ZIndex = 10
+			MainFrame.Visible = true
+			MainFrame.Parent = ScreenGui
+			Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
+			local FrameStroke = Instance.new("UIStroke", MainFrame)
+			FrameStroke.Color = Color3.fromRGB(70, 70, 70)
+			FrameStroke.Thickness = 1
+
+			local Header = Instance.new("TextButton")
+			Header.Name = "Header"
+			Header.Size = UDim2.new(1, 0, 0, 30)
+			Header.Position = UDim2.new(0, 0, 0, 0)
+			Header.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+			Header.BackgroundTransparency = 0
+			Header.BorderSizePixel = 0
+			Header.Text = ""
+			Header.AutoButtonColor = false
+			Header.ZIndex = 11
+			Header.Parent = MainFrame
+			Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 10)
+
+			local HeaderPatch = Instance.new("Frame")
+			HeaderPatch.Size = UDim2.new(1, 0, 0, 10)
+			HeaderPatch.Position = UDim2.new(0, 0, 1, -10)
+			HeaderPatch.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+			HeaderPatch.BackgroundTransparency = 0
+			HeaderPatch.BorderSizePixel = 0
+			HeaderPatch.ZIndex = 11
+			HeaderPatch.Parent = Header
+
+			local HeaderLabel = Instance.new("TextLabel")
+			HeaderLabel.Size = UDim2.new(1, -32, 1, 0)
+			HeaderLabel.Position = UDim2.new(0, 8, 0, 0)
+			HeaderLabel.BackgroundTransparency = 1
+			HeaderLabel.Text = "🐷 piggy bot control"
+			HeaderLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+			HeaderLabel.TextSize = 12
+			HeaderLabel.FontFace = Font.new("rbxasset://fonts/families/Ubuntu.json", Enum.FontWeight.Bold)
+			HeaderLabel.TextXAlignment = Enum.TextXAlignment.Left
+			HeaderLabel.ZIndex = 12
+			HeaderLabel.Parent = Header
+
+			local DestroyButton = Instance.new("TextButton")
+			DestroyButton.Name = "DestroyBtn"
+			DestroyButton.Size = UDim2.new(0, 20, 0, 20)
+			DestroyButton.Position = UDim2.new(1, -24, 0.5, -10)
+			DestroyButton.BackgroundColor3 = Color3.fromRGB(50, 20, 20)
+			DestroyButton.BackgroundTransparency = 0.2
+			DestroyButton.BorderSizePixel = 0
+			DestroyButton.Text = "❌"
+			DestroyButton.TextSize = 11
+			DestroyButton.TextColor3 = Color3.fromRGB(255, 80, 80)
+			DestroyButton.FontFace = Font.new("rbxasset://fonts/families/Ubuntu.json", Enum.FontWeight.Bold)
+			DestroyButton.ZIndex = 13
+			DestroyButton.Parent = Header
+			Instance.new("UICorner", DestroyButton).CornerRadius = UDim.new(0, 4)
+
+			local Content = Instance.new("Frame")
+			Content.Size = UDim2.new(1, 0, 1, -34)
+			Content.Position = UDim2.new(0, 0, 0, 34)
+			Content.BackgroundTransparency = 1
+			Content.ZIndex = 10
+			Content.Parent = MainFrame
+
+			local Padding = Instance.new("UIPadding", Content)
+			Padding.PaddingTop = UDim.new(0, 6)
+			Padding.PaddingBottom = UDim.new(0, 8)
+			Padding.PaddingLeft = UDim.new(0, 8)
+			Padding.PaddingRight = UDim.new(0, 8)
+
+			local Layout = Instance.new("UIListLayout", Content)
+			Layout.SortOrder = Enum.SortOrder.LayoutOrder
+			Layout.Padding = UDim.new(0, 6)
+
+			local function MakeButton(text, color, layoutOrder)
+				local btn = Instance.new("TextButton")
+				btn.Size = UDim2.new(1, 0, 0, 28)
+				btn.BackgroundColor3 = Color3.fromRGB(38, 38, 38)
+				btn.BackgroundTransparency = 0.2
+				btn.BorderSizePixel = 0
+				btn.TextColor3 = color
+				btn.TextSize = 13
+				btn.Text = text
+				btn.FontFace = Font.new("rbxasset://fonts/families/Ubuntu.json", Enum.FontWeight.Bold)
+				btn.ZIndex = 11
+				btn.LayoutOrder = layoutOrder
+				btn.Parent = Content
+				Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+				local s = Instance.new("UIStroke", btn)
+				s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+				s.Color = color
+				s.Transparency = 0.45
+				return btn, s
+			end
+
+			local ToggleButton, ToggleStroke = MakeButton("Toggle: ON", Color3.new(0, 1, 0), 1)
+			local ModeButton, ModeStroke = MakeButton("Mode: Normal", Color3.fromRGB(100, 180, 255), 2)
+
+			local dragging, dragInput, dragStart, startPos
+
+			Header.InputBegan:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					dragging = true
+					dragStart = input.Position
+					startPos = MainFrame.Position
+					input.Changed:Connect(function()
+						if input.UserInputState == Enum.UserInputState.End then
+							dragging = false
+						end
+					end)
+				end
+			end)
+
+			Header.InputChanged:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+					dragInput = input
+				end
+			end)
+
+			UserInputService.InputChanged:Connect(function(input)
+				if input == dragInput and dragging then
+					local delta = input.Position - dragStart
+					MainFrame.Position = UDim2.new(
+						startPos.X.Scale, startPos.X.Offset + delta.X,
+						startPos.Y.Scale, startPos.Y.Offset + delta.Y
+					)
+				end
+			end)
+
+			local miniDragging, miniDragInput, miniDragStart, miniStartPos, miniDragStartPos
+
+			MiniButton.InputBegan:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					miniDragging = true
+					miniDragStart = input.Position
+					miniStartPos = MiniButton.Position
+					miniDragStartPos = MiniButton.Position
+					input.Changed:Connect(function()
+						if input.UserInputState == Enum.UserInputState.End then
+							miniDragging = false
+						end
+					end)
+				end
+			end)
+
+			MiniButton.InputChanged:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+					miniDragInput = input
+				end
+			end)
+
+			UserInputService.InputChanged:Connect(function(input)
+				if input == miniDragInput and miniDragging then
+					local delta = input.Position - miniDragStart
+					MiniButton.Position = UDim2.new(
+						miniStartPos.X.Scale, miniStartPos.X.Offset + delta.X,
+						miniStartPos.Y.Scale, miniStartPos.Y.Offset + delta.Y
+					)
+				end
+			end)
+
+			local PanelOpen = true
+
+			MiniButton.MouseButton1Up:Connect(function()
+				if miniDragStartPos and MiniButton.Position == miniDragStartPos then
+					PanelOpen = not PanelOpen
+					MainFrame.Visible = PanelOpen
+				end
+				miniDragStartPos = nil
+			end)
+
+			local function UpdateToggleButton()
+				if ToggleEnabled then
+					ToggleButton.Text = "Toggle: ON"
+					ToggleButton.TextColor3 = Color3.new(0, 1, 0)
+					ToggleStroke.Color = Color3.new(0, 1, 0)
+				else
+					ToggleButton.Text = "Toggle: OFF"
+					ToggleButton.TextColor3 = Color3.new(1, 0, 0)
+					ToggleStroke.Color = Color3.new(1, 0, 0)
+				end
+			end
+
+			local function UpdateModeButton()
+				if CurrentMode == 1 then
+					ModeButton.Text = "Mode: Normal"
+					ModeButton.TextColor3 = Color3.fromRGB(100, 180, 255)
+					ModeStroke.Color = Color3.fromRGB(100, 180, 255)
+				else
+					ModeButton.Text = "Mode: Killer"
+					ModeButton.TextColor3 = Color3.fromRGB(255, 100, 100)
+					ModeStroke.Color = Color3.fromRGB(255, 100, 100)
+				end
+			end
+
+			local function ToggleToggleButton()
+				if ToggleEnabled and Controlling then
+					StopControlling(true)
+				end
+				ToggleEnabled = not ToggleEnabled
+				UpdateToggleButton()
+			end
+
+			local function SwitchMode()
+				CurrentMode = (CurrentMode == 1) and 2 or 1
+				UpdateModeButton()
+			end
+
+			local function OnMouseClick()
+				if not ToggleEnabled then return end
+				local target = Mouse.Target
+				if not target then return end
+
+				local model = target
+				while model and model ~= Workspace do
+					local h = model:FindFirstChildOfClass("Humanoid")
+					if h and h.RootPart then
+						task.wait(0)
+						Control(model)
 						break
 					end
+					model = model.Parent
 				end
 			end
-		end
 
-		if closestRootPart then
-			DummyRootPart.CFrame = closestRootPart.CFrame * CFrame.new(0, 2, -9)
-		end
-	end
-end)
+			Connections = {
+				UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+					if not gameProcessedEvent
+						and input.KeyCode == Enum.KeyCode.H
+						and input.UserInputState == Enum.UserInputState.Begin then
+						ToggleToggleButton()
+					end
+				end),
 
--- NPC List & Dropdown
-local function getNPCList()
-	local names, map = {}, {}
-	for _, inst in ipairs(Workspace:GetDescendants()) do
-		if inst:IsA("Model") and not Players:GetPlayerFromCharacter(inst) and inst ~= DummyModel then
-			local hum = inst:FindFirstChildOfClass("Humanoid")
-			if hum and hum.Health > 0 and inst:FindFirstChild("HumanoidRootPart") then
-				local label, count = inst.Name, 1
-				while map[label] do
-					count += 1
-					label = inst.Name .. " (" .. count .. ")"
-				end
-				map[label] = inst
-				table.insert(names, label)
-			end
-		end
-	end
-	table.sort(names)
-	return names, map
-end
+				Mouse.Button1Down:Connect(OnMouseClick),
+				ToggleButton.Activated:Connect(ToggleToggleButton),
+				ModeButton.Activated:Connect(SwitchMode),
 
-local initialNames, initialMap = getNPCList()
-npcMap = initialMap
+				DestroyButton.Activated:Connect(function()
+					if not dragging then
+						DestroyEverything()
+					end
+				end),
 
-local NPCDropdown = ControlTab:CreateDropdown({
-	Name = "Available NPCs",
-	Options = initialNames,
-	CurrentOption = {},
-	MultipleOptions = false,
-	Flag = "AvailableNPCs",
-	Callback = function(options)
-		local choice = type(options) == "table" and options[1] or options
-		selectedNPC = choice and npcMap[choice] or nil
+				RunService.Heartbeat:Connect(function()
+					if not (Controlling and ToggleEnabled) then return end
+
+					if not NPCRootPart or not NPCRootPart.Parent
+						or not HumanoidRootPart or not HumanoidRootPart.Parent
+						or not Humanoid or Humanoid.Health <= 0 then
+						return
+					end
+
+					if type(sethiddenproperty) == "function" then
+						pcall(function() sethiddenproperty(Client, "SimulationRadius", inf) end)
+					elseif type(setsimulationradius) == "function" then
+						pcall(function() setsimulationradius(inf) end)
+					end
+
+					if NPCRootPart then
+						local offset = CurrentMode == 1 and 7.2 or 8.4
+						local npcPosition = NPCRootPart.Position
+						HumanoidRootPart.CFrame = CFrame.new(
+							npcPosition.X, npcPosition.Y - offset, npcPosition.Z
+						) * NPCRootPart.CFrame.Rotation
+					end
+
+					for _, child in pairs(Character:GetChildren()) do
+						if child:IsA("BasePart") and child.CanCollide then
+							SetOriginalProperty(child, "CanCollide", true)
+							child.CanCollide = false
+							SetOriginalProperty(child, "CanTouch", true)
+							child.CanTouch = false
+						end
+					end
+
+					if DummyModel then
+						for _, child in pairs(DummyModel:GetChildren()) do
+							if child:IsA("BasePart") and child.CanCollide then
+								child.CanCollide = false
+								child.CanTouch = false
+							end
+						end
+					end
+
+					if NPCModel then
+						for _, child in pairs(NPCModel:GetChildren()) do
+							if child:IsA("BasePart") and child.CanCollide then
+								SetOriginalProperty(child, "CanCollide", true)
+								child.CanCollide = false
+							end
+						end
+					end
+				end),
+
+				Humanoid.Died:Once(function() StopControlling(false) end),
+				Character.Destroying:Once(function() StopControlling(false) end),
+			}
+
+			UpdateToggleButton()
+			UpdateModeButton()
+			Rayfield:Notify({ Title = "Control Bots", Content = "Original Control Panel launched successfully!", Duration = 3 })
+		end)
 	end,
 })
-
-local lastSignature = table.concat(initialNames, "|")
-task.spawn(function()
-	while true do
-		task.wait(2)
-		local names, map = getNPCList()
-		npcMap = map
-		if selectedNPC and not selectedNPC.Parent then
-			selectedNPC = nil
-		end
-		local signature = table.concat(names, "|")
-		if signature ~= lastSignature then
-			lastSignature = signature
-			NPCDropdown:Refresh(names)
-		end
-	end
-end)
-
-ControlTab:CreateButton({
-	Name = "View NPC",
-	Callback = function()
-		if Controlling then
-			Rayfield:Notify({ Title = "Control Bots", Content = "Release the NPC you are controlling first.", Duration = 3 })
-			return
-		end
-		if not selectedNPC or not selectedNPC.Parent then
-			Rayfield:Notify({ Title = "Control Bots", Content = "Select an NPC from the list first.", Duration = 3 })
-			return
-		end
-		local hum = selectedNPC:FindFirstChildOfClass("Humanoid")
-		if not hum then return end
-
-		if viewingNPC == selectedNPC then
-			viewingNPC = nil
-			local ownHum = getOwnHumanoid()
-			if ownHum then Workspace.CurrentCamera.CameraSubject = ownHum end
-			Rayfield:Notify({ Title = "Control Bots", Content = "Camera returned to your character.", Duration = 3 })
-		else
-			viewingNPC = selectedNPC
-			Workspace.CurrentCamera.CameraSubject = hum
-			Rayfield:Notify({ Title = "Control Bots", Content = "Now viewing " .. selectedNPC.Name .. ".", Duration = 3 })
-		end
-	end,
-})
-
-ControlTab:CreateButton({
-	Name = "Control Selected NPC",
-	Callback = function()
-		if Controlling then
-			StopControlling(true)
-			Rayfield:Notify({ Title = "Control Bots", Content = "You released the NPC.", Duration = 3 })
-			return
-		end
-		if not selectedNPC or not selectedNPC.Parent then
-			Rayfield:Notify({ Title = "Control Bots", Content = "Select an NPC from the list first.", Duration = 3 })
-			return
-		end
-		StartControlling(selectedNPC)
-		local hint = UserInputService.TouchEnabled and "Use the thumbstick and JUMP button." or "Use WASD and Space."
-		Rayfield:Notify({ Title = "Control Bots", Content = "Controlling " .. selectedNPC.Name .. " (" .. ControlMode .. " Mode). " .. hint, Duration = 5 })
-	end,
-})
-
-ControlTab:CreateDropdown({
-	Name = "Control Mode",
-	Options = { "Normal", "Killer" },
-	CurrentOption = { "Normal" },
-	MultipleOptions = false,
-	Flag = "ControlMode",
-	Callback = function(options)
-		local choice = type(options) == "table" and options[1] or options
-		ControlMode = choice or "Normal"
-		Rayfield:Notify({ Title = "Control Bots", Content = "Control Mode set to: " .. ControlMode, Duration = 2 })
-	end,
-})
-
-ControlTab:CreateToggle({
-	Name = "Click/Tap NPC to Control (Old Method)",
-	CurrentValue = false,
-	Flag = "ClickToControl",
-	Callback = function(Value)
-		ClickToControlEnabled = Value
-	end,
-})
-
-mouse.Button1Down:Connect(function()
-	if not ClickToControlEnabled then return end
-	local target = mouse.Target
-	if not target then return end
-
-	local model = target
-	while model and model ~= Workspace do
-		local h = model:FindFirstChildOfClass("Humanoid")
-		if h and (h.RootPart or model:FindFirstChild("HumanoidRootPart")) and not Players:GetPlayerFromCharacter(model) then
-			StartControlling(model)
-			Rayfield:Notify({ Title = "Control Bots", Content = "Controlling " .. model.Name .. " via Click/Tap.", Duration = 3 })
-			break
-		end
-		model = model.Parent
-	end
-end)
 
 -- ==========================================
 -- MAIN TAB
@@ -661,7 +848,7 @@ MainTab:CreateToggle({
 		if Value then
 			task.spawn(function()
 				while godMode2Active do
-					local char = getOwnCharacter()
+					local char = localPlayer.Character
 					if char then
 						for _, part in ipairs(char:GetChildren()) do
 							if part:IsA("BasePart") then
@@ -673,7 +860,7 @@ MainTab:CreateToggle({
 				end
 			end)
 		else
-			local char = getOwnCharacter()
+			local char = localPlayer.Character
 			if char then
 				for _, part in ipairs(char:GetChildren()) do
 					if part:IsA("BasePart") then
@@ -724,7 +911,7 @@ MainTab:CreateToggle({
 		if Value then
 			task.spawn(function()
 				while disableCollisionActive do
-					local hrp = getOwnRootPart()
+					local hrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
 					if hrp and hrp:FindFirstChild("CrouchBlocker") then
 						hrp:FindFirstChild("CrouchBlocker"):Destroy()
 					end
@@ -934,9 +1121,9 @@ local function stopFly()
 	if flyKeyUp then flyKeyUp:Disconnect() flyKeyUp = nil end
 	if mflyConn then mflyConn:Disconnect() mflyConn = nil end
 
-	local char = getOwnCharacter()
-	local hum = getOwnHumanoid()
-	local root = getOwnRootPart()
+	local char = localPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local root = char and char:FindFirstChild("HumanoidRootPart")
 	if hum then hum.PlatformStand = false end
 	if root then
 		if root:FindFirstChild("ControlBots_BV") then root.ControlBots_BV:Destroy() end
@@ -947,9 +1134,9 @@ end
 local function startFly()
 	stopFly()
 	flyingActive = true
-	local char = getOwnCharacter()
-	local root = getOwnRootPart()
-	local hum = getOwnHumanoid()
+	local char = localPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	if not (char and root and hum) then return end
 
 	local bv = Instance.new("BodyVelocity")
@@ -1023,7 +1210,7 @@ PlayerTab:CreateToggle({
 		if Value then
 			task.spawn(function()
 				while noclipActive do
-					local char = getOwnCharacter()
+					local char = localPlayer.Character
 					if char then
 						for _, child in pairs(char:GetDescendants()) do
 							if child:IsA("BasePart") then
@@ -1035,7 +1222,7 @@ PlayerTab:CreateToggle({
 				end
 			end)
 		else
-			local char = getOwnCharacter()
+			local char = localPlayer.Character
 			if char then
 				for _, child in pairs(char:GetDescendants()) do
 					if (child.Name == "Torso" or child.Name == "HumanoidRootPart" or child.Name == "UpperTorso") then
@@ -1070,13 +1257,15 @@ PlayerTab:CreateToggle({
 		if Value then
 			task.spawn(function()
 				while speedToggleActive do
-					local hum = getOwnHumanoid()
+					local char = localPlayer.Character
+					local hum = char and char:FindFirstChildOfClass("Humanoid")
 					if hum then hum.WalkSpeed = customSpeed end
 					task.wait(0.3)
 				end
 			end)
 		else
-			local hum = getOwnHumanoid()
+			local char = localPlayer.Character
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
 			if hum then hum.WalkSpeed = 16 end
 		end
 	end,
@@ -1105,13 +1294,15 @@ PlayerTab:CreateToggle({
 		if Value then
 			task.spawn(function()
 				while jumpToggleActive do
-					local hum = getOwnHumanoid()
+					local char = localPlayer.Character
+					local hum = char and char:FindFirstChildOfClass("Humanoid")
 					if hum then hum.JumpPower = customJump end
 					task.wait(0.3)
 				end
 			end)
 		else
-			local hum = getOwnHumanoid()
+			local char = localPlayer.Character
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
 			if hum then hum.JumpPower = 50 end
 		end
 	end,
@@ -1138,7 +1329,7 @@ local TpDropdown = PlayerTab:CreateDropdown({
 		if not selectedName then return end
 		local targetPlr = Players:FindFirstChild(selectedName)
 		local targetRoot = targetPlr and targetPlr.Character and targetPlr.Character:FindFirstChild("HumanoidRootPart")
-		local localRoot = getOwnRootPart()
+		local localRoot = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
 		if targetRoot and localRoot then
 			localRoot.CFrame = targetRoot.CFrame + Vector3.new(0, 3, 0)
 		end
@@ -1272,12 +1463,12 @@ TrollingTab:CreateButton({
 })
 
 -- ==========================================
--- FARMING & ITEMS TAB (Farm Tool + Auto Find)
+-- FARMING & ITEMS TAB
 -- ==========================================
 FarmTab:CreateButton({
 	Name = "Farm Tool Setup",
 	Callback = function()
-		Rayfield:Notify({ Title = "Farm Tool", Content = "Check console / instructions for Farm Tool usage.", Duration = 4 })
+		Rayfield:Notify({ Title = "Farm Tool", Content = "Farm Tool added to backpack.", Duration = 4 })
 		local highlightTool = Instance.new("Tool")
 		highlightTool.Name = "Farm Tool"
 		highlightTool.ToolTip = "Click the door then press Confirm"
@@ -1297,7 +1488,7 @@ FarmTab:CreateToggle({
 			task.spawn(function()
 				local meshIds = { "60791940" }
 				while autoBlueprintsActive do
-					local hrp = getOwnRootPart()
+					local hrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
 					if hrp then
 						for _, child in ipairs(Workspace:GetDescendants()) do
 							if child:IsA("Part") and child:FindFirstChildOfClass("ClickDetector") then
@@ -1337,7 +1528,7 @@ FarmTab:CreateToggle({
 			task.spawn(function()
 				local targetId = "rbxassetid://6714051581"
 				while autoPagesActive do
-					local hrp = getOwnRootPart()
+					local hrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
 					if hrp then
 						for _, child in ipairs(Workspace:GetDescendants()) do
 							if child:IsA("Part") then
@@ -1365,14 +1556,14 @@ FarmTab:CreateToggle({
 })
 
 -- ==========================================
--- QUESTS & SKINS TAB (Chapter Auto-Wins)
+-- QUESTS & SKINS TAB
 -- ==========================================
 QuestsTab:CreateButton({
 	Name = "Breakout: Semi-Auto Get Skin",
 	Callback = function()
 		local b = Workspace:FindFirstChild("Bunker")
 		if b then
-			local hrp = getOwnRootPart()
+			local hrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
 			if not hrp then return end
 			hrp.CFrame = CFrame.new(821.329407, 13.0502357, -81.8983536)
 			task.wait(0.3)
@@ -1391,8 +1582,8 @@ QuestsTab:CreateButton({
 	Name = "Temple (Phenna): Auto Get Skin",
 	Callback = function()
 		if Workspace:FindFirstChild("Temple") then
-			local char = getOwnCharacter()
-			local hrp = getOwnRootPart()
+			local char = localPlayer.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
 			if not (char and hrp) then return end
 			for _, can in ipairs(Workspace.ItemFolder1:GetChildren()) do
 				if can.Name == "Candle" then
@@ -1413,7 +1604,7 @@ QuestsTab:CreateButton({
 	Name = "The Hunt: Auto Complete Past",
 	Callback = function()
 		if Workspace:FindFirstChild("TimeTravel") then
-			local hrp = getOwnRootPart()
+			local hrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
 			if not hrp then return end
 			for _, yk in ipairs(Workspace.ItemFolder1:GetChildren()) do
 				if yk.Name == "YellowKey" and yk:FindFirstChild("Item") then
@@ -1433,7 +1624,7 @@ QuestsTab:CreateButton({
 	Name = "Docks: Auto Get Crawling Trap",
 	Callback = function()
 		if Workspace:FindFirstChild("Docks") then
-			local hrp = getOwnRootPart()
+			local hrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
 			if not hrp then return end
 			for _, candle in ipairs(Workspace.ItemFolder1:GetChildren()) do
 				if candle.Name == "Candle" then
@@ -1468,7 +1659,7 @@ QuestsTab:CreateButton({
 	Name = "Mall & Plant: Auto Do Mall",
 	Callback = function()
 		if Workspace:FindFirstChild("Mall") then
-			local hrp = getOwnRootPart()
+			local hrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
 			if not hrp then return end
 			pcall(function()
 				firesignal(localPlayer.PlayerGui.MainMenu.Title.SettingsMenu.HardModeOn.MouseButton1Click)
@@ -1523,7 +1714,7 @@ QuestsTab:CreateButton({
 	Name = "Decay: Auto Win Bunny Chapter",
 	Callback = function()
 		if Workspace:FindFirstChild("Bunny") then
-			local hrp = getOwnRootPart()
+			local hrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
 			if hrp and Workspace.ItemFolder1:FindFirstChild("Crossbow") then
 				hrp.CFrame = Workspace.ItemFolder1.Crossbow.CFrame
 				task.wait(0.3)
@@ -1545,7 +1736,7 @@ QuestsTab:CreateButton({
 			part.Size = Vector3.new(10, 1.5, 10)
 			part.Anchored = true
 			part.CFrame = CFrame.new(-300.542755, 249.32283, -594.703308)
-			local root = getOwnRootPart()
+			local root = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
 			if root then
 				root.CFrame = part.CFrame + Vector3.new(0, 3, 0)
 			end
