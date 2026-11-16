@@ -44,9 +44,9 @@ end
 
 -- Create Rayfield Window
 local Window = Rayfield:CreateWindow({
-	Name = "Control Bots & Veno Hub",
+	Name = "Boost Hub",
 	LoadingTitle = "Control Bots",
-	LoadingSubtitle = "Original Control Panel & Utilities",
+	LoadingSubtitle = "Boost Hub Utilities",
 	ConfigurationSaving = { Enabled = false },
 	Discord = { Enabled = false },
 	KeySystem = false,
