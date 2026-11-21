@@ -100,13 +100,23 @@ local function saveOriginalProp(inst, prop, val)
 end
 
 local function resetCameraToPlayer()
-	local cam = Workspace.CurrentCamera
-	if not cam then return end
-	cam.CameraType = Enum.CameraType.Custom
 	local char = getOwnCharacter()
 	local hum = getOwnHumanoid()
 	local hrp = getOwnRootPart()
+
+	if char then
+		localPlayer.Character = char
+	end
+
+	local cam = Workspace.CurrentCamera
+	if not cam then
+		cam = Workspace:FindFirstChildOfClass("Camera")
+	end
+	if not cam then return end
+
+	cam.CameraType = Enum.CameraType.Custom
 	if hum then
+		hum.PlatformStand = false
 		cam.CameraSubject = hum
 	elseif hrp then
 		cam.CameraSubject = hrp
@@ -115,6 +125,25 @@ local function resetCameraToPlayer()
 		if fallbackHum then
 			cam.CameraSubject = fallbackHum
 		end
+	end
+end
+
+local function forceCameraSnapBack()
+	for _, delayTime in ipairs({ 0, 0.03, 0.1, 0.25, 0.5 }) do
+		task.delay(delayTime, function()
+			if controllingNPC then return end
+			resetCameraToPlayer()
+			local cam = Workspace.CurrentCamera
+			local hum = getOwnHumanoid()
+			local hrp = getOwnRootPart()
+			if cam and hum and cam.CameraSubject ~= hum then
+				cam.CameraType = Enum.CameraType.Custom
+				cam.CameraSubject = hum
+			elseif cam and hrp and cam.CameraSubject ~= hrp then
+				cam.CameraType = Enum.CameraType.Custom
+				cam.CameraSubject = hrp
+			end
+		end)
 	end
 end
 
@@ -307,8 +336,8 @@ local function stopControlling(restorePos)
 	originalCFrame = nil
 
 	if wasControlling then
-		task.defer(resetCameraToPlayer)
-		task.delay(0.05, resetCameraToPlayer)
+		resetCameraToPlayer()
+		forceCameraSnapBack()
 	end
 end
 
