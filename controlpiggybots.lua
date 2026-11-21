@@ -99,15 +99,34 @@ local function saveOriginalProp(inst, prop, val)
 	end
 end
 
+local function resetCameraToPlayer()
+	local cam = Workspace.CurrentCamera
+	if not cam then return end
+	cam.CameraType = Enum.CameraType.Custom
+	local char = getOwnCharacter()
+	local hum = getOwnHumanoid()
+	local hrp = getOwnRootPart()
+	if hum then
+		cam.CameraSubject = hum
+	elseif hrp then
+		cam.CameraSubject = hrp
+	elseif char then
+		local fallbackHum = char:FindFirstChildOfClass("Humanoid")
+		if fallbackHum then
+			cam.CameraSubject = fallbackHum
+		end
+	end
+end
+
 local function setCameraSubject(subject)
 	local cam = Workspace.CurrentCamera
 	if cam and subject then
+		cam.CameraType = Enum.CameraType.Custom
 		cam.CameraSubject = subject
 	end
 end
 
--- Create persistent AlignPosition / AlignOrientation / LinearVelocity instances
-local clientAttachment = Instance.new("Attachment")
+-- Create persistent AlignPosition / AlignOrientation instances
 local dummyAttachment = Instance.new("Attachment")
 local npcAttachment = Instance.new("Attachment")
 
@@ -126,18 +145,12 @@ dummyHighlight.FillTransparency = 1
 dummyHighlight.OutlineColor = Color3.fromRGB(160, 75, 255)
 dummyHighlight.Enabled = false
 
-local clientVelocity = Instance.new("LinearVelocity")
-clientVelocity.Attachment0 = clientAttachment
-clientVelocity.MaxForce = math.huge
-clientVelocity.Enabled = false
-clientVelocity.Parent = Workspace
-
 local npcAlignPos = Instance.new("AlignPosition")
 npcAlignPos.ApplyAtCenterOfMass = false
 npcAlignPos.Attachment0 = npcAttachment
 npcAlignPos.Attachment1 = dummyAttachment
 npcAlignPos.MaxForce = math.huge
-npcAlignPos.Responsiveness = math.huge
+npcAlignPos.Responsiveness = 200
 npcAlignPos.Enabled = false
 npcAlignPos.Parent = Workspace
 
@@ -145,7 +158,7 @@ local npcAlignOri = Instance.new("AlignOrientation")
 npcAlignOri.Attachment0 = npcAttachment
 npcAlignOri.Attachment1 = dummyAttachment
 npcAlignOri.MaxTorque = math.huge
-npcAlignOri.Responsiveness = math.huge
+npcAlignOri.Responsiveness = 200
 npcAlignOri.Enabled = false
 npcAlignOri.Parent = Workspace
 
@@ -213,6 +226,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 end)
 
 local function stopControlling(restorePos)
+	local wasControlling = controllingNPC
 	controllingNPC = false
 	controlledModel = nil
 
@@ -231,11 +245,9 @@ local function stopControlling(restorePos)
 
 	npcAlignPos.Enabled = false
 	npcAlignOri.Enabled = false
-	clientVelocity.Enabled = false
 
 	dummyAttachment.Parent = nil
 	npcAttachment.Parent = nil
-	clientAttachment.Parent = nil
 
 	npcHighlight.Enabled = false
 	npcHighlight.Adornee = nil
@@ -253,18 +265,18 @@ local function stopControlling(restorePos)
 		jumpGui.Enabled = false
 	end
 
+	-- Destroy dummy clone BEFORE resetting LocalPlayer.Character so camera & character never stay bound to clone
+	if dummyModel then
+		dummyModel:Destroy()
+		dummyModel = nil
+	end
+
 	local char = getOwnCharacter()
 	local hum = getOwnHumanoid()
 	local hrp = getOwnRootPart()
 
-	if char and hum then
+	if char then
 		localPlayer.Character = char
-		setCameraSubject(hum)
-	end
-
-	if dummyModel then
-		dummyModel:Destroy()
-		dummyModel = nil
 	end
 
 	for inst, props in pairs(originalProps) do
@@ -277,11 +289,12 @@ local function stopControlling(restorePos)
 	end
 
 	if hum and hum.Health > 0 then
-		if restorePos and originalCFrame and hrp then
+		hum.PlatformStand = false
+		if restorePos and originalCFrame and hrp and hrp.Parent then
+			hrp.Anchored = false
+			hrp.AssemblyLinearVelocity = Vector3.zero
 			hrp.CFrame = originalCFrame
 		end
-		originalCFrame = nil
-
 		if char then
 			for _, part in ipairs(char:GetDescendants()) do
 				if part:IsA("BasePart") then
@@ -290,7 +303,12 @@ local function stopControlling(restorePos)
 				end
 			end
 		end
-		hum.PlatformStand = false
+	end
+	originalCFrame = nil
+
+	if wasControlling then
+		task.defer(resetCameraToPlayer)
+		task.delay(0.05, resetCameraToPlayer)
 	end
 end
 
@@ -314,7 +332,7 @@ local function startControlling(npcModel)
 	controlledModel = npcModel
 	originalCFrame = hrp.CFrame
 
-	-- Keep the actual NPC able to move and rotate freely
+	-- Keep the actual NPC able to move and rotate freely while following the clone
 	saveOriginalProp(npcHum, "WalkSpeed", npcHum.WalkSpeed)
 	saveOriginalProp(npcHum, "AutoRotate", npcHum.AutoRotate)
 	saveOriginalProp(npcHum, "PlatformStand", npcHum.PlatformStand)
@@ -335,11 +353,13 @@ local function startControlling(npcModel)
 		end
 	end
 
-	-- Keep local character safely at its starting spot (never pushed underground)
+	-- Anchor/keep local character safely at its starting spot so it doesn't drift away
 	clientHighlight.Adornee = char
 	clientHighlight.Parent = char
 	clientHighlight.Enabled = true
-	clientAttachment.Parent = hrp
+	saveOriginalProp(hrp, "Anchored", hrp.Anchored)
+	hrp.AssemblyLinearVelocity = Vector3.zero
+	hrp.Anchored = true
 	hum.PlatformStand = false
 
 	for _, part in ipairs(char:GetDescendants()) do
@@ -423,7 +443,6 @@ local function startControlling(npcModel)
 
 	npcAlignPos.Enabled = true
 	npcAlignOri.Enabled = true
-	clientVelocity.Enabled = false
 	controllingNPC = true
 
 	physicsConn = RunService.Heartbeat:Connect(function()
@@ -433,7 +452,7 @@ local function startControlling(npcModel)
 		local curHrp = getOwnRootPart()
 		local curHum = getOwnHumanoid()
 
-		if not npcRoot or not npcRoot.Parent or not curHrp or not curHrp.Parent or not curHum or curHum.Health <= 0 then
+		if not npcRoot or not npcRoot.Parent or not cloneRoot or not cloneRoot.Parent or not curHrp or not curHrp.Parent or not curHum or curHum.Health <= 0 then
 			stopControlling(true)
 			return
 		end
@@ -444,7 +463,7 @@ local function startControlling(npcModel)
 			pcall(function() setsimulationradius(math.huge) end)
 		end
 
-		-- Allow the actual NPC to keep moving and animating
+		-- Keep real NPC unanchored and able to move toward the clone
 		if npcHum and npcHum.Parent then
 			if npcHum.PlatformStand then
 				npcHum.PlatformStand = false
@@ -453,6 +472,23 @@ local function startControlling(npcModel)
 				npcHum.WalkSpeed = (originalProps[npcHum] and originalProps[npcHum].WalkSpeed and originalProps[npcHum].WalkSpeed > 0) and originalProps[npcHum].WalkSpeed or 16
 			end
 			npcHum.AutoRotate = true
+			npcHum:MoveTo(cloneRoot.Position)
+		end
+
+		-- Keep real NPC parts unanchored so AlignPosition / AlignOrientation pulls NPC to clone
+		if npcModel then
+			for _, part in ipairs(npcModel:GetChildren()) do
+				if part:IsA("BasePart") then
+					if part.Anchored then
+						saveOriginalProp(part, "Anchored", true)
+						part.Anchored = false
+					end
+					if part.CanCollide then
+						saveOriginalProp(part, "CanCollide", true)
+						part.CanCollide = false
+					end
+				end
+			end
 		end
 	end)
 end
@@ -536,8 +572,7 @@ ControlTab:CreateButton({
 		end
 		if viewingNPC then
 			viewingNPC = nil
-			local ownHum = getOwnHumanoid()
-			if ownHum then setCameraSubject(ownHum) end
+			resetCameraToPlayer()
 			Rayfield:Notify({ Title = "Bot Controller", Content = "Camera returned to your character.", Duration = 2.5 })
 			return
 		end
