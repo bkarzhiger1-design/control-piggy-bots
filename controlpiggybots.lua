@@ -78,8 +78,6 @@ local dummyDiedConn = nil
 local clientHealthConn = nil
 local clickToControlEnabled = false
 
-local UNDER_OFFSET = 10.5
-
 local function getOwnCharacter()
 	return localPlayer.Character
 end
@@ -316,13 +314,15 @@ local function startControlling(npcModel)
 	controlledModel = npcModel
 	originalCFrame = hrp.CFrame
 
-	-- Freeze/override the actual NPC's AI movement so it stops moving on its own
+	-- Keep the actual NPC able to move and rotate freely
 	saveOriginalProp(npcHum, "WalkSpeed", npcHum.WalkSpeed)
 	saveOriginalProp(npcHum, "AutoRotate", npcHum.AutoRotate)
 	saveOriginalProp(npcHum, "PlatformStand", npcHum.PlatformStand)
-	npcHum.WalkSpeed = 0
-	npcHum.AutoRotate = false
-	npcHum:MoveTo(npcRoot.Position)
+	if not npcHum.WalkSpeed or npcHum.WalkSpeed <= 0 then
+		npcHum.WalkSpeed = 16
+	end
+	npcHum.AutoRotate = true
+	npcHum.PlatformStand = false
 
 	for _, desc in ipairs(npcModel:GetDescendants()) do
 		if desc:IsA("BodyPosition") or desc:IsA("BodyGyro") or desc:IsA("BodyVelocity") then
@@ -335,21 +335,21 @@ local function startControlling(npcModel)
 		end
 	end
 
-	-- Protect and hide local character underground beneath the NPC
+	-- Keep local character safely at its starting spot (never pushed underground)
 	clientHighlight.Adornee = char
 	clientHighlight.Parent = char
 	clientHighlight.Enabled = true
 	clientAttachment.Parent = hrp
-	hum.PlatformStand = true
+	hum.PlatformStand = false
 
 	for _, part in ipairs(char:GetDescendants()) do
 		if part:IsA("BasePart") then
-			part.CanCollide = false
-			part.CanTouch = false
+			part.CanCollide = true
+			part.CanTouch = true
 		end
 	end
 
-	-- Build controllable clone dummy
+	-- Build controllable clone dummy starting at the NPC's current position
 	local clone = npcModel:Clone()
 	clone.Name = npcModel.Name .. "_ControllerDummy"
 	local cloneHum = clone:FindFirstChildOfClass("Humanoid")
@@ -360,6 +360,8 @@ local function startControlling(npcModel)
 		stopControlling(true)
 		return
 	end
+
+	clone:PivotTo(npcRoot.CFrame)
 
 	-- Ensure clone can walk and jump smoothly on both PC and Mobile
 	cloneHum.WalkSpeed = (originalProps[npcHum] and originalProps[npcHum].WalkSpeed and originalProps[npcHum].WalkSpeed > 0) and originalProps[npcHum].WalkSpeed or 16
@@ -380,7 +382,6 @@ local function startControlling(npcModel)
 			desc.Anchored = false
 		end
 	end
-	-- Keep root part colliding with floor so dummy walks & jumps properly
 	cloneRoot.CanCollide = true
 
 	dummyModel = clone
@@ -422,7 +423,7 @@ local function startControlling(npcModel)
 
 	npcAlignPos.Enabled = true
 	npcAlignOri.Enabled = true
-	clientVelocity.Enabled = true
+	clientVelocity.Enabled = false
 	controllingNPC = true
 
 	physicsConn = RunService.Heartbeat:Connect(function()
@@ -443,32 +444,15 @@ local function startControlling(npcModel)
 			pcall(function() setsimulationradius(math.huge) end)
 		end
 
-		-- Keep real NPC AI suppressed so it never walks away on its own
+		-- Allow the actual NPC to keep moving and animating
 		if npcHum and npcHum.Parent then
-			npcHum.WalkSpeed = 0
-			npcHum:MoveTo(npcRoot.Position)
-		end
-
-		-- Anchor local character safely below the controlled NPC for network ownership
-		local pos = npcRoot.Position
-		curHrp.CFrame = CFrame.new(pos.X, pos.Y - UNDER_OFFSET, pos.Z) * npcRoot.CFrame.Rotation
-
-		if curChar then
-			for _, part in ipairs(curChar:GetChildren()) do
-				if part:IsA("BasePart") then
-					part.CanCollide = false
-					part.CanTouch = false
-				end
+			if npcHum.PlatformStand then
+				npcHum.PlatformStand = false
 			end
-		end
-
-		if npcModel then
-			for _, part in ipairs(npcModel:GetChildren()) do
-				if part:IsA("BasePart") and part.CanCollide then
-					saveOriginalProp(part, "CanCollide", true)
-					part.CanCollide = false
-				end
+			if not npcHum.WalkSpeed or npcHum.WalkSpeed <= 0 then
+				npcHum.WalkSpeed = (originalProps[npcHum] and originalProps[npcHum].WalkSpeed and originalProps[npcHum].WalkSpeed > 0) and originalProps[npcHum].WalkSpeed or 16
 			end
+			npcHum.AutoRotate = true
 		end
 	end)
 end
